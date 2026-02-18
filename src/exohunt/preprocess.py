@@ -1,12 +1,29 @@
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass
 
 import lightkurve as lk
 import numpy as np
 
 
 LOGGER = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class PreprocessingQualityMetrics:
+    n_points_raw: int
+    n_points_prepared: int
+    retained_cadence_fraction: float
+    raw_rms: float
+    prepared_rms: float
+    raw_mad: float
+    prepared_mad: float
+    raw_trend_proxy: float
+    prepared_trend_proxy: float
+    rms_improvement_ratio: float
+    mad_improvement_ratio: float
+    trend_improvement_ratio: float
 
 
 def _resolve_window_length(n_points: int, requested: int) -> int | None:
@@ -26,6 +43,99 @@ def _estimate_flatten_runtime_seconds(n_points: int, window_length: int) -> tupl
     lower = max(0.5, 2.0 * scale)
     upper = max(lower + 1.0, 8.0 * scale)
     return lower, upper
+
+
+def _relative_flux(flux: np.ndarray) -> np.ndarray:
+    median = float(np.nanmedian(flux))
+    if np.isfinite(median) and abs(median) > 1e-12:
+        return flux / median
+    return flux
+
+
+def _rms_around_median(values: np.ndarray) -> float:
+    center = float(np.nanmedian(values))
+    residuals = values - center
+    return float(np.sqrt(np.nanmean(residuals * residuals)))
+
+
+def _median_absolute_deviation(values: np.ndarray) -> float:
+    center = float(np.nanmedian(values))
+    return float(np.nanmedian(np.abs(values - center)))
+
+
+def _trend_proxy(values: np.ndarray) -> float:
+    # Approximate long-timescale baseline amplitude via a broad moving average.
+    if len(values) == 0:
+        return float("nan")
+    if len(values) < 15:
+        return float(np.nanstd(values))
+    window = max(15, len(values) // 40)
+    if window % 2 == 0:
+        window += 1
+    kernel = np.ones(window, dtype=float) / float(window)
+    padded = np.pad(values, (window // 2, window // 2), mode="edge")
+    baseline = np.convolve(padded, kernel, mode="valid")
+    low, high = np.nanpercentile(baseline, [5.0, 95.0])
+    return float(high - low)
+
+
+def _improvement_ratio(raw_value: float, prepared_value: float) -> float:
+    if not np.isfinite(raw_value) or raw_value <= 0:
+        return float("nan")
+    if not np.isfinite(prepared_value):
+        return float("nan")
+    if prepared_value <= 0:
+        return float("inf")
+    return float(raw_value / prepared_value)
+
+
+def compute_preprocessing_quality_metrics(
+    lc_raw: lk.LightCurve,
+    lc_prepared: lk.LightCurve,
+) -> PreprocessingQualityMetrics:
+    """Compute before/after quality metrics for preprocessing validation.
+
+    Theory: good transit preprocessing should reduce broadband scatter (RMS, MAD)
+    and suppress long-timescale baseline wander (trend proxy) while retaining as
+    many valid cadences as possible.
+    """
+    raw_flux = np.asarray(lc_raw.flux.value, dtype=float)
+    prepared_flux = np.asarray(lc_prepared.flux.value, dtype=float)
+
+    raw_finite = raw_flux[np.isfinite(raw_flux)]
+    prepared_finite = prepared_flux[np.isfinite(prepared_flux)]
+    if len(raw_finite) == 0:
+        raise RuntimeError("Cannot compute preprocessing metrics: raw flux has no finite points.")
+    if len(prepared_finite) == 0:
+        raise RuntimeError(
+            "Cannot compute preprocessing metrics: prepared flux has no finite points."
+        )
+
+    raw_relative = _relative_flux(raw_finite)
+    prepared_relative = _relative_flux(prepared_finite)
+
+    raw_rms = _rms_around_median(raw_relative)
+    prepared_rms = _rms_around_median(prepared_relative)
+    raw_mad = _median_absolute_deviation(raw_relative)
+    prepared_mad = _median_absolute_deviation(prepared_relative)
+    raw_trend = _trend_proxy(raw_relative)
+    prepared_trend = _trend_proxy(prepared_relative)
+    retained_fraction = float(len(prepared_finite) / len(raw_finite))
+
+    return PreprocessingQualityMetrics(
+        n_points_raw=int(len(raw_finite)),
+        n_points_prepared=int(len(prepared_finite)),
+        retained_cadence_fraction=retained_fraction,
+        raw_rms=raw_rms,
+        prepared_rms=prepared_rms,
+        raw_mad=raw_mad,
+        prepared_mad=prepared_mad,
+        raw_trend_proxy=raw_trend,
+        prepared_trend_proxy=prepared_trend,
+        rms_improvement_ratio=_improvement_ratio(raw_rms, prepared_rms),
+        mad_improvement_ratio=_improvement_ratio(raw_mad, prepared_mad),
+        trend_improvement_ratio=_improvement_ratio(raw_trend, prepared_trend),
+    )
 
 
 def prepare_lightcurve(

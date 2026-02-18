@@ -48,3 +48,7 @@ python -m exohunt.cli --target "TIC 261136679" --plot-time-start 8300 --plot-tim
 ```
 
 The output plot is saved as `outputs/plots/<target>_prepared.png`.
+
+Each run also writes preprocessing quality metrics to:
+- `outputs/metrics/preprocessing_summary.csv` (append-only run table)
+- `outputs/metrics/<target>_preprocessing_summary.json` (latest per-target summary)

@@ -37,10 +37,11 @@ Important note: "When implementing the step explain the theory behind the milest
 - Log preprocessing parameters and point counts.
 - Exit criteria: each run emits a plot that visually compares raw and prepared series.
 
-7. [Pending] [Validation] Add preprocessing quality metrics
+7. [Done] [Validation] Add preprocessing quality metrics
 - Compute before/after stats (RMS, MAD, retained cadence fraction, trend proxy).
 - Emit per-target preprocessing summary artifact.
 - Exit criteria: each run writes a metrics row showing raw-to-prepared improvement values.
+- Implemented in `.docs/milestone-02-preprocessing-metrics-theory.md`.
 
 8. [Pending] [Research] Add preprocessing method comparisons
 - Evaluate multiple detrending configurations on benchmark targets.

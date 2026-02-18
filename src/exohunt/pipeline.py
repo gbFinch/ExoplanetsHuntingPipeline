@@ -1,6 +1,11 @@
 from __future__ import annotations
 
+import csv
+import hashlib
+import json
 import logging
+from dataclasses import asdict
+from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
@@ -12,6 +17,7 @@ from exohunt.cache import (
     _load_npz_lightcurve,
     _load_segment_manifest,
     _prepared_cache_path,
+    _safe_target_name,
     _save_npz_lightcurve,
     _segment_base_dir,
     _segment_prepared_cache_path,
@@ -21,11 +27,134 @@ from exohunt.cache import (
 from exohunt.ingest import _extract_segments, _parse_authors, _parse_sectors
 from exohunt.models import LightCurveSegment
 from exohunt.plotting import save_raw_vs_prepared_plot, save_raw_vs_prepared_plot_interactive
-from exohunt.preprocess import prepare_lightcurve
+from exohunt.preprocess import compute_preprocessing_quality_metrics, prepare_lightcurve
 from exohunt.progress import _render_progress
 
 
 LOGGER = logging.getLogger(__name__)
+
+_PREPROCESSING_METRICS_COLUMNS = [
+    "n_points_raw",
+    "n_points_prepared",
+    "retained_cadence_fraction",
+    "raw_rms",
+    "prepared_rms",
+    "raw_mad",
+    "prepared_mad",
+    "raw_trend_proxy",
+    "prepared_trend_proxy",
+    "rms_improvement_ratio",
+    "mad_improvement_ratio",
+    "trend_improvement_ratio",
+]
+
+_PREPROCESSING_SUMMARY_COLUMNS = [
+    "run_utc",
+    "target",
+    "preprocess_mode",
+    "data_source",
+    "outlier_sigma",
+    "flatten_window_length",
+    "no_flatten",
+    *_PREPROCESSING_METRICS_COLUMNS,
+]
+
+
+def _metrics_cache_path(
+    target: str,
+    cache_dir: Path,
+    preprocess_mode: str,
+    outlier_sigma: float,
+    flatten_window_length: int,
+    no_flatten: bool,
+    sectors: str | None,
+    authors: str | None,
+    raw_n_points: int,
+    prepared_n_points: int,
+    raw_time_min: float,
+    raw_time_max: float,
+    prepared_time_min: float,
+    prepared_time_max: float,
+) -> Path:
+    payload = {
+        "version": 1,
+        "target": target,
+        "preprocess_mode": preprocess_mode,
+        "outlier_sigma": round(float(outlier_sigma), 6),
+        "flatten_window_length": int(flatten_window_length),
+        "no_flatten": bool(no_flatten),
+        "sectors": sectors or "",
+        "authors": authors or "",
+        "raw_n_points": int(raw_n_points),
+        "prepared_n_points": int(prepared_n_points),
+        "raw_time_min": round(float(raw_time_min), 7),
+        "raw_time_max": round(float(raw_time_max), 7),
+        "prepared_time_min": round(float(prepared_time_min), 7),
+        "prepared_time_max": round(float(prepared_time_max), 7),
+    }
+    encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+    key = hashlib.sha1(encoded).hexdigest()[:16]
+    return cache_dir / "metrics" / f"{_safe_target_name(target)}__metrics_{key}.json"
+
+
+def _load_cached_metrics(metrics_cache_path: Path) -> dict[str, float | int] | None:
+    if not metrics_cache_path.exists():
+        return None
+    try:
+        payload = json.loads(metrics_cache_path.read_text(encoding="utf-8"))
+    except Exception as exc:
+        LOGGER.warning(
+            "Metrics cache read failed for %s (%s); recomputing.", metrics_cache_path, exc
+        )
+        return None
+    if not isinstance(payload, dict):
+        return None
+    return payload
+
+
+def _save_cached_metrics(metrics_cache_path: Path, metrics: dict[str, float | int]) -> None:
+    metrics_cache_path.parent.mkdir(parents=True, exist_ok=True)
+    metrics_cache_path.write_text(json.dumps(metrics, sort_keys=True, indent=2), encoding="utf-8")
+
+
+def _write_preprocessing_metrics(
+    target: str,
+    preprocess_mode: str,
+    outlier_sigma: float,
+    flatten_window_length: int,
+    no_flatten: bool,
+    data_source: str,
+    metrics: dict[str, float | int | str],
+) -> tuple[Path, Path]:
+    output_dir = Path("outputs/metrics")
+    output_dir.mkdir(parents=True, exist_ok=True)
+    run_utc = datetime.now(tz=timezone.utc).isoformat()
+
+    row = {
+        "run_utc": run_utc,
+        "target": target,
+        "preprocess_mode": preprocess_mode,
+        "data_source": data_source,
+        "outlier_sigma": float(outlier_sigma),
+        "flatten_window_length": int(flatten_window_length),
+        "no_flatten": bool(no_flatten),
+    }
+    for key in _PREPROCESSING_METRICS_COLUMNS:
+        if key not in metrics:
+            raise KeyError(f"Missing preprocessing metric key: {key}")
+        row[key] = metrics[key]
+
+    csv_path = output_dir / "preprocessing_summary.csv"
+    write_header = not csv_path.exists()
+    with csv_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_PREPROCESSING_SUMMARY_COLUMNS)
+        if write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    json_path = output_dir / f"{_safe_target_name(target)}_preprocessing_summary.json"
+    json_path.write_text(json.dumps(row, indent=2, sort_keys=True), encoding="utf-8")
+    return csv_path, json_path
 
 
 def _stitch_segments(lightcurves: list[lk.LightCurve]) -> tuple[lk.LightCurve, list[float]]:
@@ -114,17 +243,25 @@ def fetch_and_plot(
                     perf_counter() - step_started,
                 )
             except Exception as exc:
-                LOGGER.warning("Raw cache read failed for %s (%s); re-downloading.", raw_cache_path, exc)
+                LOGGER.warning(
+                    "Raw cache read failed for %s (%s); re-downloading.", raw_cache_path, exc
+                )
 
         if lc is None and lc_prepared is None:
             LOGGER.info("Step 2/5: searching TESS products")
             step_started = perf_counter()
             search = lk.search_lightcurve(target, mission="TESS", author="SPOC")
-            LOGGER.info("Search complete in %.2fs (%d entries)", perf_counter() - step_started, len(search))
+            LOGGER.info(
+                "Search complete in %.2fs (%d entries)", perf_counter() - step_started, len(search)
+            )
             if len(search) == 0:
                 raise RuntimeError(f"No TESS light curves found for target: {target}")
             if max_download_files is not None and len(search) > max_download_files:
-                LOGGER.info("Limiting download to first %d entries (of %d).", max_download_files, len(search))
+                LOGGER.info(
+                    "Limiting download to first %d entries (of %d).",
+                    max_download_files,
+                    len(search),
+                )
                 search = search[:max_download_files]
 
             LOGGER.info("Step 3/5: downloading and stitching light curves")
@@ -204,11 +341,17 @@ def fetch_and_plot(
             LOGGER.info("Step 2/5: searching TESS products")
             step_started = perf_counter()
             search = lk.search_lightcurve(target, mission="TESS", author="SPOC")
-            LOGGER.info("Search complete in %.2fs (%d entries)", perf_counter() - step_started, len(search))
+            LOGGER.info(
+                "Search complete in %.2fs (%d entries)", perf_counter() - step_started, len(search)
+            )
             if len(search) == 0:
                 raise RuntimeError(f"No TESS light curves found for target: {target}")
             if max_download_files is not None and len(search) > max_download_files:
-                LOGGER.info("Limiting download to first %d entries (of %d).", max_download_files, len(search))
+                LOGGER.info(
+                    "Limiting download to first %d entries (of %d).",
+                    max_download_files,
+                    len(search),
+                )
                 search = search[:max_download_files]
 
             LOGGER.info("Step 3/5: downloading segment light curves")
@@ -223,7 +366,11 @@ def fetch_and_plot(
             )
             if not raw_segments:
                 raise RuntimeError("No segments remain after sector/author filters.")
-            LOGGER.info("Download complete in %.2fs (%d segments)", perf_counter() - step_started, len(raw_segments))
+            LOGGER.info(
+                "Download complete in %.2fs (%d segments)",
+                perf_counter() - step_started,
+                len(raw_segments),
+            )
             _write_segment_manifest(target, cache_dir, raw_segments)
             for segment in raw_segments:
                 raw_path = _segment_raw_cache_path(target, cache_dir, segment.segment_id)
@@ -280,8 +427,43 @@ def fetch_and_plot(
 
     n_points_raw = len(lc.time.value)
     n_points_prepared = len(lc_prepared.time.value)
+    raw_time_min = float(np.nanmin(lc.time.value))
+    raw_time_max = float(np.nanmax(lc.time.value))
     time_min = float(lc_prepared.time.value.min())
     time_max = float(lc_prepared.time.value.max())
+    metrics_cache_path = _metrics_cache_path(
+        target=target,
+        cache_dir=cache_dir,
+        preprocess_mode=preprocess_mode,
+        outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length,
+        no_flatten=no_flatten,
+        sectors=sectors,
+        authors=authors,
+        raw_n_points=n_points_raw,
+        prepared_n_points=n_points_prepared,
+        raw_time_min=raw_time_min,
+        raw_time_max=raw_time_max,
+        prepared_time_min=time_min,
+        prepared_time_max=time_max,
+    )
+    metrics_payload = _load_cached_metrics(metrics_cache_path)
+    metrics_cache_hit = metrics_payload is not None
+    if metrics_payload is None:
+        preprocessing_metrics = compute_preprocessing_quality_metrics(lc, lc_prepared)
+        metrics_payload = asdict(preprocessing_metrics)
+        _save_cached_metrics(metrics_cache_path, metrics_payload)
+    else:
+        LOGGER.info("Preprocessing metrics cache hit: %s", metrics_cache_path)
+    metrics_csv_path, metrics_json_path = _write_preprocessing_metrics(
+        target=target,
+        preprocess_mode=preprocess_mode,
+        outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length,
+        no_flatten=no_flatten,
+        data_source=data_source,
+        metrics=metrics_payload,
+    )
 
     LOGGER.info("Step 5/5: generating plot")
     step_started = perf_counter()
@@ -310,8 +492,22 @@ def fetch_and_plot(
     LOGGER.info("Target: %s", target)
     LOGGER.info("Preprocess mode: %s", preprocess_mode)
     LOGGER.info("Points (raw -> prepared): %d -> %d", n_points_raw, n_points_prepared)
+    LOGGER.info(
+        "Preprocessing metrics: RMS %.6g -> %.6g (x%.3f), MAD %.6g -> %.6g (x%.3f), Trend %.6g -> %.6g (x%.3f), Retained=%.3f",
+        float(metrics_payload["raw_rms"]),
+        float(metrics_payload["prepared_rms"]),
+        float(metrics_payload["rms_improvement_ratio"]),
+        float(metrics_payload["raw_mad"]),
+        float(metrics_payload["prepared_mad"]),
+        float(metrics_payload["mad_improvement_ratio"]),
+        float(metrics_payload["raw_trend_proxy"]),
+        float(metrics_payload["prepared_trend_proxy"]),
+        float(metrics_payload["trend_improvement_ratio"]),
+        float(metrics_payload["retained_cadence_fraction"]),
+    )
     LOGGER.info("Time range (BTJD): %.5f -> %.5f", time_min, time_max)
     LOGGER.info("Data source: %s", data_source)
+    LOGGER.info("Metrics cache: %s", "hit" if metrics_cache_hit else "miss")
     LOGGER.info("Raw cache file: %s", raw_cache_path)
     LOGGER.info("Prepared cache file: %s", prepared_cache_path)
     LOGGER.info(
@@ -320,17 +516,27 @@ def fetch_and_plot(
         flatten_window_length,
         no_flatten,
     )
-    LOGGER.info("Max download files: %s", max_download_files if max_download_files is not None else "all")
+    LOGGER.info(
+        "Max download files: %s", max_download_files if max_download_files is not None else "all"
+    )
     LOGGER.info("Sector filter: %s", sectors if sectors else "all")
     LOGGER.info("Author filter: %s", authors if authors else "all")
-    LOGGER.info("Plot time start (BJD-2450000): %s", plot_time_start if plot_time_start is not None else "auto")
-    LOGGER.info("Plot time end (BJD-2450000): %s", plot_time_end if plot_time_end is not None else "auto")
+    LOGGER.info(
+        "Plot time start (BJD-2450000): %s",
+        plot_time_start if plot_time_start is not None else "auto",
+    )
+    LOGGER.info(
+        "Plot time end (BJD-2450000): %s", plot_time_end if plot_time_end is not None else "auto"
+    )
     LOGGER.info("Interactive HTML: %s", interactive_html)
     LOGGER.info("Interactive max points: %d", interactive_max_points)
     LOGGER.info("Total runtime: %.2fs", perf_counter() - started_at)
     LOGGER.info("Saved plot: %s", output_path)
     if interactive_path is not None:
         LOGGER.info("Saved interactive plot: %s", interactive_path)
+    LOGGER.info("Saved preprocessing metrics CSV: %s", metrics_csv_path)
+    LOGGER.info("Saved preprocessing metrics JSON: %s", metrics_json_path)
+    LOGGER.info("Metrics cache file: %s", metrics_cache_path)
     LOGGER.info("--------------------------------")
 
     return output_path

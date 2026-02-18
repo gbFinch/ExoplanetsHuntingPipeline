@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import numpy as np
@@ -11,6 +12,7 @@ from exohunt.cache import (
 )
 from exohunt.pipeline import fetch_and_plot
 from exohunt.plotting import _apply_time_window, _downsample_minmax
+from exohunt.preprocess import compute_preprocessing_quality_metrics
 
 
 def test_safe_target_name():
@@ -69,6 +71,11 @@ class _ArrayValue:
         self.value = np.asarray(values, dtype=float)
 
 
+class _SimpleLC:
+    def __init__(self, flux):
+        self.flux = _ArrayValue(flux)
+
+
 class _FakeLightCurve:
     def __init__(self):
         self.time = _ArrayValue([1.0, 2.0, 3.0])
@@ -105,6 +112,8 @@ def test_fetch_and_plot_uses_cache(monkeypatch, tmp_path):
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path.exists()
+    assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
+    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
 
 
 def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
@@ -132,6 +141,8 @@ def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path.exists()
+    assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
+    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
 
 
 def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
@@ -173,3 +184,102 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
     assert output_path.exists()
     segment_root = cache_dir / "segments" / "tic_261136679"
     assert segment_root.exists()
+    assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
+    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
+
+
+def test_compute_preprocessing_quality_metrics_improvement():
+    raw = _SimpleLC([1.0, 1.04, 0.96, 1.03, 0.97, 1.02, 0.98])
+    prepared = _SimpleLC([1.0, 1.01, 0.99, 1.0, 1.0, 1.01, 0.99])
+
+    metrics = compute_preprocessing_quality_metrics(raw, prepared)
+
+    assert metrics.prepared_rms < metrics.raw_rms
+    assert metrics.prepared_mad < metrics.raw_mad
+    assert metrics.rms_improvement_ratio > 1.0
+    assert metrics.mad_improvement_ratio > 1.0
+    assert metrics.retained_cadence_fraction == 1.0
+
+
+def test_fetch_and_plot_reuses_metrics_cache(monkeypatch, tmp_path):
+    target = "TIC 261136679"
+    cache_dir = tmp_path / "cache"
+    prepared_cache = _prepared_cache_path(
+        target=target,
+        cache_dir=cache_dir,
+        outlier_sigma=5.0,
+        flatten_window_length=401,
+        no_flatten=False,
+    )
+    prepared_cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        prepared_cache,
+        time=np.asarray([1.0, 2.0, 3.0]),
+        flux=np.asarray([0.99, 1.01, 1.00]),
+    )
+
+    def _unexpected_search(*args, **kwargs):
+        raise AssertionError("search_lightcurve should not be called on prepared cache hit")
+
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _unexpected_search)
+    monkeypatch.chdir(tmp_path)
+
+    first_output = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
+    assert first_output.exists()
+
+    def _should_not_compute(*args, **kwargs):
+        raise AssertionError("compute_preprocessing_quality_metrics should not run on cache hit")
+
+    monkeypatch.setattr(pipeline, "compute_preprocessing_quality_metrics", _should_not_compute)
+    second_output = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
+    assert second_output.exists()
+
+
+def test_preprocessing_summary_csv_column_order_stable(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+    metrics_ordered = {
+        "n_points_raw": 10,
+        "n_points_prepared": 9,
+        "retained_cadence_fraction": 0.9,
+        "raw_rms": 1.0,
+        "prepared_rms": 0.5,
+        "raw_mad": 0.8,
+        "prepared_mad": 0.4,
+        "raw_trend_proxy": 2.0,
+        "prepared_trend_proxy": 0.1,
+        "rms_improvement_ratio": 2.0,
+        "mad_improvement_ratio": 2.0,
+        "trend_improvement_ratio": 20.0,
+    }
+    metrics_reversed = dict(reversed(list(metrics_ordered.items())))
+
+    pipeline._write_preprocessing_metrics(
+        target="TIC 1",
+        preprocess_mode="global",
+        outlier_sigma=5.0,
+        flatten_window_length=401,
+        no_flatten=False,
+        data_source="raw-cache",
+        metrics=metrics_ordered,
+    )
+    pipeline._write_preprocessing_metrics(
+        target="TIC 1",
+        preprocess_mode="global",
+        outlier_sigma=5.0,
+        flatten_window_length=401,
+        no_flatten=False,
+        data_source="raw-cache",
+        metrics=metrics_reversed,
+    )
+
+    csv_path = tmp_path / "outputs/metrics/preprocessing_summary.csv"
+    with csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        rows = list(reader)
+        assert reader.fieldnames == pipeline._PREPROCESSING_SUMMARY_COLUMNS
+
+    assert len(rows) == 2
+    assert float(rows[0]["raw_rms"]) == 1.0
+    assert float(rows[0]["prepared_rms"]) == 0.5
+    assert float(rows[1]["raw_rms"]) == 1.0
+    assert float(rows[1]["prepared_rms"]) == 0.5
