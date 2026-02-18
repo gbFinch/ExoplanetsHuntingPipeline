@@ -43,10 +43,11 @@ Important note: "When implementing the step explain the theory behind the milest
 - Exit criteria: each run writes a metrics row showing raw-to-prepared improvement values.
 - Implemented in `.docs/milestone-02-preprocessing-metrics-theory.md`.
 
-8. [Pending] [Research] Add preprocessing method comparisons
+8. [Done] [Research] Add preprocessing method comparisons
 - Evaluate multiple detrending configurations on benchmark targets.
 - Document recommended defaults by cadence/sector length.
 - Exit criteria: a comparison report selects default preprocessing settings with rationale.
+- Implemented via `src/exohunt/comparison.py` with report output `outputs/reports/preprocessing-method-comparison.md`.
 
 9. [Pending] [Engineering] Implement BLS transit search core
 - Run Box Least Squares on prepared light curves.

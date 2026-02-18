@@ -52,3 +52,12 @@ The output plot is saved as `outputs/plots/<target>_prepared.png`.
 Each run also writes preprocessing quality metrics to:
 - `outputs/metrics/preprocessing_summary.csv` (append-only run table)
 - `outputs/metrics/<target>_preprocessing_summary.json` (latest per-target summary)
+
+Build preprocessing method comparison report (selects recommended defaults by cadence/span):
+
+```bash
+python -m exohunt.comparison \
+  --metrics-csv outputs/metrics/preprocessing_summary.csv \
+  --cache-dir outputs/cache/lightcurves \
+  --report-path outputs/reports/preprocessing-method-comparison.md
+```

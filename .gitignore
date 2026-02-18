@@ -9,3 +9,5 @@ __pycache__/
 src/*.egg-info/
 outputs/plots/
 outputs/cache/
+outputs/metrics/
+outputs/reports/

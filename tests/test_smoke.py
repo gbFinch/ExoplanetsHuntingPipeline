@@ -1,8 +1,10 @@
 import csv
+import json
 from pathlib import Path
 
 import numpy as np
 
+from exohunt import comparison
 from exohunt import pipeline
 from exohunt.cache import (
     _cache_path,
@@ -283,3 +285,50 @@ def test_preprocessing_summary_csv_column_order_stable(monkeypatch, tmp_path):
     assert float(rows[0]["prepared_rms"]) == 0.5
     assert float(rows[1]["raw_rms"]) == 1.0
     assert float(rows[1]["prepared_rms"]) == 0.5
+
+
+def test_build_preprocessing_comparison_report(tmp_path):
+    metrics_csv = tmp_path / "outputs/metrics/preprocessing_summary.csv"
+    metrics_csv.parent.mkdir(parents=True, exist_ok=True)
+    metrics_csv.write_text(
+        "\n".join(
+            [
+                "run_utc,target,preprocess_mode,data_source,outlier_sigma,flatten_window_length,no_flatten,n_points_raw,n_points_prepared,retained_cadence_fraction,raw_rms,prepared_rms,raw_mad,prepared_mad,raw_trend_proxy,prepared_trend_proxy,rms_improvement_ratio,mad_improvement_ratio,trend_improvement_ratio",
+                "2026-02-18T00:00:00+00:00,TIC 1,per-sector,segment-cache,5.0,401,False,100,100,1.0,1,0.02,1,0.02,1,0.01,50,50,100",
+                "2026-02-18T00:01:00+00:00,TIC 1,per-sector,segment-cache,5.0,1604,False,100,100,1.0,1,0.04,1,0.04,1,0.005,25,25,200",
+            ]
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+    segment_root = tmp_path / "cache/segments/tic_1"
+    segment_root.mkdir(parents=True, exist_ok=True)
+    manifest_payload = {
+        "target": "TIC 1",
+        "segments": [
+            {
+                "segment_id": "sector_0001__idx_000",
+                "sector": 1,
+                "author": "SPOC",
+                "cadence": 0.0013889,
+            }
+        ],
+    }
+    (segment_root / "manifest.json").write_text(json.dumps(manifest_payload), encoding="utf-8")
+    np.savez(
+        segment_root / "sector_0001__idx_000__raw.npz",
+        time=np.asarray([0.0, 27.0]),
+        flux=np.asarray([1.0, 1.0]),
+    )
+
+    report_path = comparison.build_preprocessing_comparison_report(
+        metrics_csv_path=metrics_csv,
+        cache_dir=tmp_path / "cache",
+        report_path=tmp_path / "outputs/reports/preprocessing-method-comparison.md",
+    )
+    assert report_path.exists()
+    report = report_path.read_text(encoding="utf-8")
+    assert "short-cadence" in report
+    assert "standard-span" in report
+    assert "`sigma=5,window=401,flatten=on`" in report
