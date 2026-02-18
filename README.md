@@ -10,9 +10,12 @@ pip install -e .[dev]
 python -m exohunt.cli --target "TIC 261136679"
 ```
 
-By default, downloaded stitched light curves are cached under `outputs/cache/lightcurves`.
-Prepared (preprocessed) light curves are also cached there using preprocessing-parameter keys,
-so repeated runs with the same settings skip flattening.
+By default, preprocessing runs in `per-sector` mode:
+- each downloaded segment is cached under `outputs/cache/lightcurves/segments/<target>/`
+- each prepared segment is cached with a preprocessing-parameter hash
+- segments are stitched only after per-segment preprocessing
+
+Global stitched-cache mode is still available with `--preprocess-mode global`.
 Use `--refresh-cache` to ignore cache and download fresh data:
 
 ```bash
@@ -23,6 +26,12 @@ Preprocessing is now applied before plotting (normalize, outlier filtering, flat
 
 ```bash
 python -m exohunt.cli --target "TIC 261136679" --outlier-sigma 5 --flatten-window-length 401
+```
+
+Example per-sector filters:
+
+```bash
+python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --sectors 14,15 --authors SPOC
 ```
 
 The output plot is saved as `outputs/plots/<target>_prepared.png`.

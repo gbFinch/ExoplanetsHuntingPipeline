@@ -3,7 +3,13 @@ from pathlib import Path
 import numpy as np
 
 from exohunt import cli
-from exohunt.cli import _cache_path, _prepared_cache_path, _safe_target_name, fetch_and_plot
+from exohunt.cli import (
+    _cache_path,
+    _prepared_cache_path,
+    _safe_target_name,
+    _segment_prepared_cache_path,
+    fetch_and_plot,
+)
 
 
 def test_safe_target_name():
@@ -27,6 +33,20 @@ def test_prepared_cache_path():
     assert path.suffix == ".npz"
 
 
+def test_segment_prepared_cache_path():
+    path = _segment_prepared_cache_path(
+        target="TIC 261136679",
+        cache_dir=Path("cache"),
+        segment_id="sector_0014__idx_000",
+        outlier_sigma=5.0,
+        flatten_window_length=401,
+        no_flatten=False,
+    )
+    assert path.parent == Path("cache/segments/tic_261136679")
+    assert path.name.startswith("sector_0014__idx_000__prep_")
+    assert path.suffix == ".npz"
+
+
 class _ArrayValue:
     def __init__(self, values):
         self.value = np.asarray(values, dtype=float)
@@ -36,7 +56,7 @@ class _FakeLightCurve:
     def __init__(self):
         self.time = _ArrayValue([1.0, 2.0, 3.0])
         self.flux = _ArrayValue([0.99, 1.01, 1.00])
-        self.meta = {"origin": "test"}
+        self.meta = {"origin": "test", "SECTOR": 14, "AUTHOR": "SPOC", "TIMEDEL": 0.0013888}
 
     def remove_nans(self):
         return self
@@ -66,7 +86,7 @@ def test_fetch_and_plot_uses_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.lk, "search_lightcurve", _unexpected_search)
     monkeypatch.chdir(tmp_path)
 
-    output_path = fetch_and_plot(target, cache_dir=cache_dir)
+    output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path.exists()
 
 
@@ -93,7 +113,7 @@ def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.lk, "search_lightcurve", _unexpected_search)
     monkeypatch.chdir(tmp_path)
 
-    output_path = fetch_and_plot(target, cache_dir=cache_dir)
+    output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path.exists()
 
 
@@ -103,11 +123,17 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
     fake_lc = _FakeLightCurve()
 
     class _FakeLCCollection:
+        def __init__(self):
+            self.items = [fake_lc]
+
         def __len__(self):
-            return 1
+            return len(self.items)
 
         def stitch(self):
             return fake_lc
+
+        def __iter__(self):
+            return iter(self.items)
 
     class _FakeSearchResult:
         def __len__(self):
@@ -126,6 +152,7 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
     monkeypatch.setattr(cli.lk, "search_lightcurve", _fake_search)
     monkeypatch.chdir(tmp_path)
 
-    output_path = fetch_and_plot(target, cache_dir=cache_dir)
+    output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="per-sector")
     assert output_path.exists()
-    assert _cache_path(target, cache_dir).exists()
+    segment_root = cache_dir / "segments" / "tic_261136679"
+    assert segment_root.exists()
