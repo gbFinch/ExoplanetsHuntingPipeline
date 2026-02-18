@@ -8,3 +8,4 @@ __pycache__/
 .docs/
 src/*.egg-info/
 outputs/plots/
+outputs/cache/

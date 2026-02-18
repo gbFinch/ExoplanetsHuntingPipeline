@@ -4,47 +4,85 @@ Important note: "When implementing the step explain the theory behind the milest
 
 ## Milestones
 
-1. [Pending] Define analysis goals and success metrics
-- Set explicit detection targets (e.g., SNR threshold, max false-positive rate, minimum transit depth sensitivity).
+1. [Done] [Research] Define quantitative success criteria
+- Set target detection regime (depth, period, duration, minimum transit count).
+- Set acceptable false-positive budget and review throughput.
+- Choose benchmark target list (known planets + quiet non-planet stars).
+- Exit criteria: a documented metrics table and benchmark list committed in `.docs/`.
+- Implemented in `.docs/success-criteria.md`.
 
-2. [Pending] Build a robust light-curve ingestion layer
-- Standardize loading from cache/download, metadata tracking, and per-sector provenance.
+2. [Done] [Engineering] Add local target cache
+- Cache stitched light curves per target.
+- Add cache reuse and refresh option in CLI.
+- Exit criteria: repeated runs on same target skip network download.
 
-3. [Pending] Add quality filtering and outlier handling
-- Apply quality flags, remove bad cadences, and clip non-astrophysical outliers safely.
+3. [Done] [Engineering] Make cache format robust
+- Store cache as `.npz` (`time`, `flux`) to avoid FITS serialization failures.
+- Add tests for cache hit and cache miss behavior.
+- Exit criteria: cache read/write passes tests and no centroid serialization errors occur.
 
-4. [Pending] Implement detrending and normalization pipeline
-- Add flattening/systematics correction options and compare methods on known targets.
+4. [Done] [Engineering] Add preprocessing v1 pipeline
+- Apply TESS quality mask on download (`quality_bitmask="default"`).
+- Apply `remove_nans`, `normalize`, `remove_outliers`, and `flatten`.
+- Add safe flatten-window handling for short light curves.
+- Exit criteria: CLI produces prepared light curve for benchmark targets without runtime failure.
 
-5. [Pending] Create diagnostic visualizations
-- Generate raw vs cleaned plots, trend model overlays, and residual diagnostics per target.
+5. [Done] [Research] Add theory notes for preprocessing milestone
+- Add in-code theory summary in `prepare_lightcurve()` docstring.
+- Add `.docs/milestone-01-preprocessing-theory.md`.
+- Exit criteria: theory for each preprocessing action is documented in code/docs.
 
-6. [Pending] Implement transit search module (BLS-first)
-- Run Box Least Squares period search and store top candidate periods, durations, and depths.
+6. [Done] [Validation] Upgrade diagnostics plot to raw vs prepared
+- Save two-panel plot to compare raw and prepared light curves.
+- Log preprocessing parameters and point counts.
+- Exit criteria: each run emits a plot that visually compares raw and prepared series.
 
-7. [Pending] Add candidate scoring and ranking
-- Score detections by SNR, odd-even consistency, transit count, and period plausibility.
+7. [Pending] [Validation] Add preprocessing quality metrics
+- Compute before/after stats (RMS, MAD, retained cadence fraction, trend proxy).
+- Emit per-target preprocessing summary artifact.
+- Exit criteria: each run writes a metrics row showing raw-to-prepared improvement values.
 
-8. [Pending] Build false-positive vetting checks
-- Add checks for eclipsing binaries, harmonic aliases, centroid shifts, and data-artifact signatures.
+8. [Pending] [Research] Add preprocessing method comparisons
+- Evaluate multiple detrending configurations on benchmark targets.
+- Document recommended defaults by cadence/sector length.
+- Exit criteria: a comparison report selects default preprocessing settings with rationale.
 
-9. [Pending] Add phase-folded validation products
-- Produce phase-folded plots at candidate periods with binned overlays and transit windows.
+9. [Pending] [Engineering] Implement BLS transit search core
+- Run Box Least Squares on prepared light curves.
+- Return top candidate periods, durations, depths, and power.
+- Exit criteria: BLS module returns ranked candidates for a target without manual intervention.
 
-10. [Pending] Estimate preliminary planet parameters
-- Compute first-pass radius ratio, period, duration, and equilibrium-temperature proxies (with assumptions logged).
+10. [Pending] [Engineering] Persist candidate tables
+- Write ranked BLS candidates to CSV/JSON under `outputs/candidates/`.
+- Include preprocessing parameters and run metadata in outputs.
+- Exit criteria: each run writes structured candidate files reproducibly.
 
-11. [Pending] Benchmark on known TESS planets
-- Validate recovery rate against confirmed systems before searching for new candidates.
+11. [Pending] [Validation] Add candidate diagnostic products
+- Save periodograms for top detections.
+- Save phase-folded plots with transit-window overlays.
+- Exit criteria: top-N candidates each have periodogram and phase-folded diagnostic assets.
 
-12. [Pending] Expand automated tests for analysis pipeline
-- Add unit/integration tests for preprocessing, period search, and vetting logic with reproducible fixtures.
+12. [Pending] [Validation] Add candidate vetting heuristics v1
+- Add odd-even depth comparison.
+- Add minimum transit-count and alias/harmonic checks.
+- Exit criteria: each candidate has pass/fail vetting flags with recorded reasons.
 
-13. [Pending] Add experiment tracking and reproducibility
-- Log config, software versions, random seeds, and outputs for every analysis run.
+13. [Pending] [Engineering] Add preliminary planet parameter estimation
+- Estimate first-pass radius ratio and duration-based plausibility checks.
+- Record assumptions and uncertainty caveats in outputs.
+- Exit criteria: candidate records include parameter estimates and explicit assumptions.
 
-14. [Pending] Create a candidate report/export workflow
-- Produce machine-readable candidate summaries (CSV/JSON) plus a human review report.
+14. [Pending] [Validation] Expand automated tests for analysis modules
+- Add unit tests for preprocessing metrics and BLS ranking logic.
+- Add integration tests with fixed fixtures for reproducibility.
+- Exit criteria: tests cover core analysis flow and pass in CI/local venv.
 
-15. [Pending] Prepare for scale and batch processing
-- Add batch target runs, resumability, and parallel-safe execution for many TIC IDs.
+15. [Pending] [Engineering] Add run manifest and reproducibility tracking
+- Save run config, package versions, and timestamps per analysis run.
+- Ensure reruns can be compared target-by-target.
+- Exit criteria: each run has a manifest that can recreate analysis settings.
+
+16. [Pending] [Engineering] Add batch processing workflow
+- Run analysis for many TIC IDs from an input list.
+- Support resumable execution and per-target failure isolation.
+- Exit criteria: batch command completes with resumable state and per-target status report.
