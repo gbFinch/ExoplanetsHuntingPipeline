@@ -89,6 +89,53 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="Optional plot x-axis end in BJD-2450000.",
     )
+    parser.add_argument(
+        "--no-bls",
+        action="store_true",
+        help="Disable BLS transit search on the prepared light curve.",
+    )
+    parser.add_argument(
+        "--bls-period-min-days",
+        type=float,
+        default=0.5,
+        help="Minimum BLS period in days.",
+    )
+    parser.add_argument(
+        "--bls-period-max-days",
+        type=float,
+        default=20.0,
+        help="Maximum BLS period in days.",
+    )
+    parser.add_argument(
+        "--bls-duration-min-hours",
+        type=float,
+        default=0.5,
+        help="Minimum BLS transit duration in hours.",
+    )
+    parser.add_argument(
+        "--bls-duration-max-hours",
+        type=float,
+        default=10.0,
+        help="Maximum BLS transit duration in hours.",
+    )
+    parser.add_argument(
+        "--bls-n-periods",
+        type=int,
+        default=2000,
+        help="Number of trial periods in BLS period grid.",
+    )
+    parser.add_argument(
+        "--bls-n-durations",
+        type=int,
+        default=12,
+        help="Number of trial durations in BLS duration grid.",
+    )
+    parser.add_argument(
+        "--bls-top-n",
+        type=int,
+        default=5,
+        help="Number of ranked BLS candidates to return/log.",
+    )
     return parser
 
 
@@ -110,6 +157,14 @@ def main() -> int:
         interactive_max_points=args.interactive_max_points,
         plot_time_start=args.plot_time_start,
         plot_time_end=args.plot_time_end,
+        run_bls=not args.no_bls,
+        bls_period_min_days=args.bls_period_min_days,
+        bls_period_max_days=args.bls_period_max_days,
+        bls_duration_min_hours=args.bls_duration_min_hours,
+        bls_duration_max_hours=args.bls_duration_max_hours,
+        bls_n_periods=args.bls_n_periods,
+        bls_n_durations=args.bls_n_durations,
+        bls_top_n=args.bls_top_n,
     )
     return 0
 

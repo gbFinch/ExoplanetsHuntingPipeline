@@ -6,6 +6,7 @@ import numpy as np
 
 from exohunt import comparison
 from exohunt import pipeline
+from exohunt.bls import run_bls_search
 from exohunt.cache import (
     _cache_path,
     _prepared_cache_path,
@@ -113,7 +114,7 @@ def test_fetch_and_plot_uses_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
-    assert output_path.exists()
+    assert output_path is None
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
     assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
 
@@ -142,7 +143,7 @@ def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
-    assert output_path.exists()
+    assert output_path is None
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
     assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
 
@@ -183,7 +184,7 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="per-sector")
-    assert output_path.exists()
+    assert output_path is None
     segment_root = cache_dir / "segments" / "tic_261136679"
     assert segment_root.exists()
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
@@ -227,14 +228,38 @@ def test_fetch_and_plot_reuses_metrics_cache(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 
     first_output = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
-    assert first_output.exists()
+    assert first_output is None
 
     def _should_not_compute(*args, **kwargs):
         raise AssertionError("compute_preprocessing_quality_metrics should not run on cache hit")
 
     monkeypatch.setattr(pipeline, "compute_preprocessing_quality_metrics", _should_not_compute)
     second_output = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
-    assert second_output.exists()
+    assert second_output is None
+
+
+def test_fetch_and_plot_generates_plot_when_time_window_provided(monkeypatch, tmp_path):
+    target = "TIC 261136679"
+    cache_dir = tmp_path / "cache"
+    cache_file = _cache_path(target, cache_dir)
+    cache_file.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(cache_file, time=np.asarray([1.0, 2.0, 3.0]), flux=np.asarray([0.99, 1.01, 1.00]))
+
+    def _unexpected_search(*args, **kwargs):
+        raise AssertionError("search_lightcurve should not be called on cache hit")
+
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _unexpected_search)
+    monkeypatch.chdir(tmp_path)
+
+    output_path = fetch_and_plot(
+        target,
+        cache_dir=cache_dir,
+        preprocess_mode="global",
+        plot_time_start=7000.0,
+        plot_time_end=7010.0,
+    )
+    assert output_path is not None
+    assert output_path.exists()
 
 
 def test_preprocessing_summary_csv_column_order_stable(monkeypatch, tmp_path):
@@ -332,3 +357,42 @@ def test_build_preprocessing_comparison_report(tmp_path):
     assert "short-cadence" in report
     assert "standard-span" in report
     assert "`sigma=5,window=401,flatten=on`" in report
+
+
+class _BLSLC:
+    def __init__(self, time, flux):
+        self.time = _ArrayValue(time)
+        self.flux = _ArrayValue(flux)
+
+
+def test_run_bls_search_detects_injected_period():
+    period_days = 3.2
+    duration_days = 3.0 / 24.0
+    depth = 0.01
+    time = np.arange(0.0, 60.0, 0.02)
+    phase = np.mod(time - 0.4 * period_days, period_days)
+    in_transit = (phase < duration_days) | (phase > period_days - duration_days)
+    flux = np.ones_like(time)
+    flux[in_transit] -= depth
+    lc = _BLSLC(time=time, flux=flux)
+
+    candidates = run_bls_search(
+        lc_prepared=lc,
+        period_min_days=0.5,
+        period_max_days=10.0,
+        duration_min_hours=1.0,
+        duration_max_hours=6.0,
+        n_periods=1200,
+        n_durations=10,
+        top_n=3,
+    )
+
+    assert len(candidates) >= 1
+    best = candidates[0]
+    assert abs(best.period_days - period_days) / period_days < 0.03
+    assert best.depth_ppm > 5000
+
+
+def test_run_bls_search_short_series_returns_empty():
+    lc = _BLSLC(time=np.asarray([1.0, 2.0, 3.0]), flux=np.asarray([1.0, 1.0, 1.0]))
+    assert run_bls_search(lc_prepared=lc) == []

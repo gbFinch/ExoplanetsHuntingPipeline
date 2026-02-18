@@ -49,10 +49,11 @@ Important note: "When implementing the step explain the theory behind the milest
 - Exit criteria: a comparison report selects default preprocessing settings with rationale.
 - Implemented via `src/exohunt/comparison.py` with report output `outputs/reports/preprocessing-method-comparison.md`.
 
-9. [Pending] [Engineering] Implement BLS transit search core
+9. [Done] [Engineering] Implement BLS transit search core
 - Run Box Least Squares on prepared light curves.
 - Return top candidate periods, durations, depths, and power.
 - Exit criteria: BLS module returns ranked candidates for a target without manual intervention.
+- Implemented in `src/exohunt/bls.py` and integrated into `src/exohunt/pipeline.py`.
 
 10. [Pending] [Engineering] Persist candidate tables
 - Write ranked BLS candidates to CSV/JSON under `outputs/candidates/`.

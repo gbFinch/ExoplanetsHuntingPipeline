@@ -24,6 +24,7 @@ from exohunt.cache import (
     _segment_raw_cache_path,
     _write_segment_manifest,
 )
+from exohunt.bls import run_bls_search
 from exohunt.ingest import _extract_segments, _parse_authors, _parse_sectors
 from exohunt.models import LightCurveSegment
 from exohunt.plotting import save_raw_vs_prepared_plot, save_raw_vs_prepared_plot_interactive
@@ -194,7 +195,15 @@ def fetch_and_plot(
     interactive_max_points: int = 200_000,
     plot_time_start: float | None = None,
     plot_time_end: float | None = None,
-) -> Path:
+    run_bls: bool = True,
+    bls_period_min_days: float = 0.5,
+    bls_period_max_days: float = 20.0,
+    bls_duration_min_hours: float = 0.5,
+    bls_duration_max_hours: float = 10.0,
+    bls_n_periods: int = 2000,
+    bls_n_durations: int = 12,
+    bls_top_n: int = 5,
+) -> Path | None:
     started_at = perf_counter()
     selected_sectors = _parse_sectors(sectors)
     selected_authors = _parse_authors(authors)
@@ -465,28 +474,58 @@ def fetch_and_plot(
         metrics=metrics_payload,
     )
 
-    LOGGER.info("Step 5/5: generating plot")
-    step_started = perf_counter()
-    output_path = save_raw_vs_prepared_plot(
-        target=target,
-        lc_raw=lc,
-        lc_prepared=lc_prepared,
-        boundaries=boundaries,
-        plot_time_start=plot_time_start,
-        plot_time_end=plot_time_end,
-    )
+    bls_candidates = []
+    if run_bls:
+        LOGGER.info("Step 5/6: running BLS transit search")
+        step_started = perf_counter()
+        bls_candidates = run_bls_search(
+            lc_prepared=lc_prepared,
+            period_min_days=bls_period_min_days,
+            period_max_days=bls_period_max_days,
+            duration_min_hours=bls_duration_min_hours,
+            duration_max_hours=bls_duration_max_hours,
+            n_periods=bls_n_periods,
+            n_durations=bls_n_durations,
+            top_n=bls_top_n,
+        )
+        LOGGER.info(
+            "BLS complete in %.2fs (%d candidate%s)",
+            perf_counter() - step_started,
+            len(bls_candidates),
+            "" if len(bls_candidates) == 1 else "s",
+        )
+    else:
+        LOGGER.info("Step 5/6: skipping BLS transit search (--no-bls)")
+
+    should_generate_plot = plot_time_start is not None or plot_time_end is not None
+    output_path = None
     interactive_path = None
-    if interactive_html:
-        interactive_path = save_raw_vs_prepared_plot_interactive(
+    if should_generate_plot:
+        LOGGER.info("Step 6/6: generating plot")
+        step_started = perf_counter()
+        output_path = save_raw_vs_prepared_plot(
             target=target,
             lc_raw=lc,
             lc_prepared=lc_prepared,
             boundaries=boundaries,
-            max_points=interactive_max_points,
             plot_time_start=plot_time_start,
             plot_time_end=plot_time_end,
         )
-    LOGGER.info("Plot complete in %.2fs", perf_counter() - step_started)
+        if interactive_html:
+            interactive_path = save_raw_vs_prepared_plot_interactive(
+                target=target,
+                lc_raw=lc,
+                lc_prepared=lc_prepared,
+                boundaries=boundaries,
+                max_points=interactive_max_points,
+                plot_time_start=plot_time_start,
+                plot_time_end=plot_time_end,
+            )
+        LOGGER.info("Plot complete in %.2fs", perf_counter() - step_started)
+    else:
+        LOGGER.info(
+            "Step 6/6: skipping plot generation (set --plot-time-start/--plot-time-end to enable)"
+        )
 
     LOGGER.info("--------------------------------")
     LOGGER.info("Target: %s", target)
@@ -530,8 +569,34 @@ def fetch_and_plot(
     )
     LOGGER.info("Interactive HTML: %s", interactive_html)
     LOGGER.info("Interactive max points: %d", interactive_max_points)
+    LOGGER.info(
+        "BLS settings: enabled=%s period=[%.2f, %.2f]d duration=[%.2f, %.2f]h n_periods=%d n_durations=%d top_n=%d",
+        run_bls,
+        bls_period_min_days,
+        bls_period_max_days,
+        bls_duration_min_hours,
+        bls_duration_max_hours,
+        bls_n_periods,
+        bls_n_durations,
+        bls_top_n,
+    )
+    LOGGER.info("BLS candidates found: %d", len(bls_candidates))
+    for candidate in bls_candidates:
+        LOGGER.info(
+            "  - BLS #%d: period=%.6fd duration=%.3fh depth=%.6g (%.1f ppm) power=%.6g transit_count_est=%.2f",
+            candidate.rank,
+            candidate.period_days,
+            candidate.duration_hours,
+            candidate.depth,
+            candidate.depth_ppm,
+            candidate.power,
+            candidate.transit_count_estimate,
+        )
     LOGGER.info("Total runtime: %.2fs", perf_counter() - started_at)
-    LOGGER.info("Saved plot: %s", output_path)
+    if output_path is not None:
+        LOGGER.info("Saved plot: %s", output_path)
+    else:
+        LOGGER.info("Saved plot: skipped")
     if interactive_path is not None:
         LOGGER.info("Saved interactive plot: %s", interactive_path)
     LOGGER.info("Saved preprocessing metrics CSV: %s", metrics_csv_path)

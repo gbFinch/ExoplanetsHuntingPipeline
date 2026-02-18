@@ -41,13 +41,19 @@ pip install -e .[plotting]
 python -m exohunt.cli --target "TIC 261136679" --interactive-html --interactive-max-points 200000
 ```
 
-Plot only a selected timeline window (BJD-2450000):
+Plots are generated only when at least one time bound is provided. For example (BJD-2450000):
 
 ```bash
 python -m exohunt.cli --target "TIC 261136679" --plot-time-start 8300 --plot-time-end 8350
 ```
 
 The output plot is saved as `outputs/plots/<target>_prepared.png`.
+
+BLS transit-search core runs by default on prepared light curves (top candidates are logged):
+
+```bash
+python -m exohunt.cli --target "TIC 261136679" --bls-period-min-days 0.5 --bls-period-max-days 20 --bls-top-n 5
+```
 
 Each run also writes preprocessing quality metrics to:
 - `outputs/metrics/preprocessing_summary.csv` (append-only run table)
