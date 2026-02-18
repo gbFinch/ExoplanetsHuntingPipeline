@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 from pathlib import Path
 
 import matplotlib.pyplot as plt
@@ -10,6 +11,7 @@ import lightkurve as lk
 
 
 DEFAULT_TARGET = "TIC 261136679"
+LOGGER = logging.getLogger(__name__)
 
 
 def _safe_target_name(target: str) -> str:
@@ -21,9 +23,10 @@ def fetch_and_plot(target: str) -> Path:
     if len(search) == 0:
         raise RuntimeError(f"No TESS light curves found for target: {target}")
 
-    lc = search[0].download()
-    if lc is None:
+    lcs = search.download_all()
+    if lcs is None or len(lcs) == 0:
         raise RuntimeError(f"Failed to download TESS light curve for target: {target}")
+    lc = lcs.stitch().remove_nans()
     n_points = len(lc.time.value)
     time_min = float(lc.time.value.min())
     time_max = float(lc.time.value.max())
@@ -33,7 +36,7 @@ def fetch_and_plot(target: str) -> Path:
     output_path = output_dir / f"{_safe_target_name(target)}_raw.png"
 
     fig, ax = plt.subplots(figsize=(10, 4))
-    ax.plot(lc.time.value, lc.flux.value, ".", markersize=1)
+    ax.plot(lc.time.value, lc.flux.value, ".", markersize=0.5, alpha=0.7)
     ax.set_title(f"TESS Light Curve: {target}")
     ax.set_xlabel("Time [BTJD]")
     ax.set_ylabel("Flux")
@@ -41,10 +44,13 @@ def fetch_and_plot(target: str) -> Path:
     fig.savefig(output_path, dpi=150)
     plt.close(fig)
 
-    print(f"Target: {target}")
-    print(f"Points: {n_points}")
-    print(f"Time range (BTJD): {time_min:.5f} -> {time_max:.5f}")
-    print(f"Saved plot: {output_path}")
+    LOGGER.info("--------------------------------")
+    LOGGER.info("Target: %s", target)
+    LOGGER.info("Points: %d", n_points)
+    LOGGER.info("Time range (BTJD): %.5f -> %.5f", time_min, time_max)
+    LOGGER.info("Saved plot: %s", output_path)
+    LOGGER.info("Meta: %s", lc.meta)
+    LOGGER.info("--------------------------------")
 
     return output_path
 
@@ -58,6 +64,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def main() -> int:
+    logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args()
     fetch_and_plot(args.target)
     return 0
