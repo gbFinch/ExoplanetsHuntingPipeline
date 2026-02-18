@@ -2,14 +2,14 @@ from pathlib import Path
 
 import numpy as np
 
-from exohunt import cli
-from exohunt.cli import (
+from exohunt import pipeline
+from exohunt.cache import (
     _cache_path,
     _prepared_cache_path,
-    _safe_target_name,
     _segment_prepared_cache_path,
-    fetch_and_plot,
+    _safe_target_name,
 )
+from exohunt.pipeline import fetch_and_plot
 
 
 def test_safe_target_name():
@@ -83,7 +83,7 @@ def test_fetch_and_plot_uses_cache(monkeypatch, tmp_path):
     def _unexpected_search(*args, **kwargs):
         raise AssertionError("search_lightcurve should not be called on cache hit")
 
-    monkeypatch.setattr(cli.lk, "search_lightcurve", _unexpected_search)
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _unexpected_search)
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
@@ -110,7 +110,7 @@ def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
     def _unexpected_search(*args, **kwargs):
         raise AssertionError("search_lightcurve should not be called on prepared cache hit")
 
-    monkeypatch.setattr(cli.lk, "search_lightcurve", _unexpected_search)
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _unexpected_search)
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
@@ -149,7 +149,7 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
         assert author in (None, "SPOC")
         return _FakeSearchResult()
 
-    monkeypatch.setattr(cli.lk, "search_lightcurve", _fake_search)
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _fake_search)
     monkeypatch.chdir(tmp_path)
 
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="per-sector")
