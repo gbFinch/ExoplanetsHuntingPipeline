@@ -7,53 +7,45 @@ Tools for fetching and inspecting TESS light curves.
 ```bash
 source .venv/bin/activate
 pip install -e .[dev]
-python -m exohunt.cli --target "TIC 261136679"
+python -m exohunt.cli run --target "TIC 261136679" --config science-default
 ```
 
-By default, preprocessing runs in `per-sector` mode:
+Built-in presets:
+- `quicklook`
+- `science-default`
+- `deep-search`
+
+Generate a starter config file:
+
+```bash
+python -m exohunt.cli init-config --from science-default --out ./configs/myrun.toml
+```
+
+Run with a preset name or config path:
+
+```bash
+python -m exohunt.cli run --target "TIC 261136679" --config deep-search
+python -m exohunt.cli run --target "TIC 261136679" --config ./configs/myrun.toml
+```
+
+By default (`science-default`), preprocessing runs in `per-sector` mode:
 - each downloaded segment is cached under `outputs/cache/lightcurves/segments/<target>/`
 - each prepared segment is cached with a preprocessing-parameter hash
 - segments are stitched only after per-segment preprocessing
 
-Stitched-cache mode is available with `--preprocess-mode stitched` (`global` is accepted as a legacy alias).
-Use `--refresh-cache` to ignore cache and download fresh data:
-
-```bash
-python -m exohunt.cli --target "TIC 261136679" --refresh-cache
-```
-
-Preprocessing is now applied before plotting (normalize, outlier filtering, flattening):
-
-```bash
-python -m exohunt.cli --target "TIC 261136679" --outlier-sigma 5 --flatten-window-length 401
-```
-
-Disable preprocessing (pass raw flux through as prepared flux):
-
-```bash
-python -m exohunt.cli --target "TIC 261136679" --no-preprocess
-```
-
-Author filtering in per-sector mode:
-
-```bash
-python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --authors SPOC
-```
-
-Interactive downsampled HTML (recommended for very large light curves):
+Interactive downsampled HTML (recommended for very large light curves) is enabled in `deep-search`:
 
 ```bash
 pip install -e .[plotting]
-python -m exohunt.cli --target "TIC 261136679" --interactive-html --interactive-max-points 200000
+python -m exohunt.cli run --target "TIC 261136679" --config deep-search
 ```
 
 Plot outputs are selected by mode:
-- `--plot-mode stitched`: one stitched plot per run
-- `--plot-mode per-sector`: one plot per prepared sector
+- `plot.mode = "stitched"`: one stitched plot per run
+- `plot.mode = "per-sector"`: one plot per prepared sector
 
 ```bash
-python -m exohunt.cli --target "TIC 261136679" --plot-mode stitched
-python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --plot-mode per-sector
+python -m exohunt.cli run --target "TIC 261136679" --config ./configs/myrun.toml
 ```
 
 Outputs are saved under `outputs/<target>/plots/` with deterministic names:
@@ -63,13 +55,13 @@ Outputs are saved under `outputs/<target>/plots/` with deterministic names:
 BLS transit-search core runs by default on prepared light curves (top candidates are logged):
 
 ```bash
-python -m exohunt.cli --target "TIC 261136679" --bls-period-min-days 0.5 --bls-period-max-days 20 --bls-top-n 5
+python -m exohunt.cli run --target "TIC 261136679" --config science-default
 ```
 
 To run BLS independently per prepared sector (instead of stitched):
 
 ```bash
-python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --bls-mode per-sector
+python -m exohunt.cli run --target "TIC 261136679" --config ./configs/per-sector-bls.toml
 ```
 
 Each run writes ranked BLS candidate tables to `outputs/<target>/candidates/` as deterministic
@@ -101,7 +93,7 @@ reruns can be compared target-by-target.
 Run many targets with resumable batch mode:
 
 ```bash
-python -m exohunt.cli --batch-targets-file .docs/targets.txt --batch-resume
+python -m exohunt.cli batch --targets-file .docs/targets.txt --config science-default --resume
 ```
 
 Example `batch-targets` file (`.docs/targets.txt`):
