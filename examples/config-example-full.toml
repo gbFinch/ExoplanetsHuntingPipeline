@@ -1,0 +1,107 @@
+# Exohunt config example with full field explanations.
+#
+# Usage:
+#   python -m exohunt.cli run --target "TIC 261136679" --config .docs/config-example-full.toml
+#   python -m exohunt.cli batch --targets-file .docs/targets.txt --config .docs/config-example-full.toml
+
+schema_version = 1
+# Allowed values: 1
+# Description: config schema version used by validator.
+
+preset = "science-default"
+# Allowed values: "quicklook" | "science-default" | "deep-search"
+# Description: optional provenance label. If set, it records which preset baseline this file was derived from.
+
+[io]
+refresh_cache = false
+# Allowed values: true | false
+# Description: when true, ignore cache and re-download/recompute.
+
+[ingest]
+authors = ["SPOC"]
+# Allowed values: non-empty list of strings, e.g. ["SPOC"], ["SPOC", "QLP"]
+# Description: ingest author filter.
+# Notes: each value is normalized to uppercase.
+
+[preprocess]
+enabled = true
+# Allowed values: true | false
+# Description: master toggle for preprocessing pipeline.
+
+mode = "per-sector"
+# Allowed values: "stitched" | "per-sector"
+# Legacy mapping: "global" is accepted and mapped to "stitched" with a warning.
+# Description:
+#   - "stitched": preprocess after stitching into one series
+#   - "per-sector": preprocess each segment first, then stitch
+
+outlier_sigma = 5.0
+# Allowed values: float > 0
+# Description: sigma threshold for outlier rejection.
+
+flatten_window_length = 401
+# Allowed values: positive odd integer (e.g. 201, 401, 801)
+# Description: detrending window length for flattening.
+
+flatten = true
+# Allowed values: true | false
+# Description: enable/disable flatten detrending step.
+
+[plot]
+enabled = false
+# Allowed values: true | false
+# Description: master toggle for static/interactive plot generation.
+
+mode = "stitched"
+# Allowed values: "stitched" | "per-sector"
+# Constraint: plot.mode="per-sector" requires preprocess.mode="per-sector".
+# Description:
+#   - "stitched": write one stitched plot
+#   - "per-sector": write one plot per segment
+
+interactive_html = false
+# Allowed values: true | false
+# Description: additionally write interactive Plotly HTML outputs.
+
+interactive_max_points = 200000
+# Allowed values: integer >= 1000
+# Description: downsample cap per trace for interactive plots.
+
+[bls]
+enabled = true
+# Allowed values: true | false
+# Description: run Box Least Squares transit search.
+
+mode = "stitched"
+# Allowed values: "stitched" | "per-sector"
+# Description:
+#   - "stitched": run BLS on stitched prepared light curve
+#   - "per-sector": run BLS separately per prepared segment
+
+period_min_days = 0.5
+# Allowed values: float > 0 and < period_max_days
+# Description: minimum trial period in days.
+
+period_max_days = 20.0
+# Allowed values: float > period_min_days
+# Description: maximum trial period in days.
+
+duration_min_hours = 0.5
+# Allowed values: float > 0 and < duration_max_hours
+# Description: minimum trial transit duration in hours.
+
+duration_max_hours = 10.0
+# Allowed values: float > duration_min_hours
+# Description: maximum trial transit duration in hours.
+
+n_periods = 2000
+# Allowed values: integer >= 1
+# Description: number of period samples in BLS grid.
+
+n_durations = 12
+# Allowed values: integer >= 1
+# Description: number of duration samples in BLS grid.
+
+top_n = 5
+# Allowed values: integer >= 1
+# Description: number of ranked BLS candidates retained.

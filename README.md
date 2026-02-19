@@ -21,6 +21,9 @@ Generate a starter config file:
 python -m exohunt.cli init-config --from science-default --out ./configs/myrun.toml
 ```
 
+See `examples/config-example-full.toml` for a fully annotated config with every field,
+constraints, and allowed values.
+
 Run with a preset name or config path:
 
 ```bash
