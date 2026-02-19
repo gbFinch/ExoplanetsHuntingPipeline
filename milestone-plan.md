@@ -96,3 +96,63 @@ Important note: "When implementing the step explain the theory behind the milest
 - Support resumable execution and per-target failure isolation.
 - Exit criteria: batch command completes with resumable state and per-target status report.
 - Implemented in `src/exohunt/pipeline.py` (`run_batch_analysis`) and CLI flags in `src/exohunt/cli.py`.
+
+## Next Milestones (Refactoring-First)
+
+17. [Planned] [Refactor] Remove ingest sector filtering
+- Remove `--sectors` from run/batch UX.
+- Remove ingest-sector filtering from pipeline inputs and config schema.
+- Ingest always uses all available sectors.
+- Exit criteria: sector filter is not accepted in new UX; pipeline behavior is full-ingest by default.
+- Theory note: explain completeness vs user-control tradeoff and why full-ingest is safer as default.
+
+18. [Planned] [Refactor] Simplify plotting controls to mode-based behavior
+- Remove `--plot-time-start`, `--plot-time-end`, `--plot-sectors` from new UX.
+- Introduce `plot.mode = stitched | per-sector`.
+- Ensure stitched mode writes one file and per-sector mode writes one file per sector.
+- Exit criteria: plotting behavior is selected by mode only, with deterministic output naming.
+- Theory note: explain why mode-based plotting reduces cognitive load while preserving review utility.
+
+19. [Planned] [Refactor] Normalize mode vocabulary + preprocessing toggle
+- Normalize preprocess mode naming to `stitched | per-sector` (map legacy `global -> stitched`).
+- Add `preprocess.enabled` toggle in resolved config.
+- Define behavior when preprocessing is disabled.
+- Exit criteria: mode names are consistent across preprocess/plot/bls and validated centrally.
+- Theory note: document consistency principle and reduced ambiguity in CLI semantics.
+
+20. [Planned] [Refactor] Remove fixed operational knobs from user config
+- Remove configurable `cache_dir` (fixed internal path).
+- Remove configurable `max_download_files` (always unlimited in standard workflow).
+- Keep internal implementation support only if needed for tests/debug.
+- Exit criteria: these parameters are absent from user-facing presets, schema, and help.
+- Theory note: explain why non-decision knobs should not be user-facing defaults.
+
+21. [Planned] [Engineering] Implement config schema + resolver
+- Add versioned config schema and strict validation.
+- Implement merge order: defaults -> built-in preset -> user file -> CLI explicit overrides.
+- Add clear validation errors for invalid/unknown keys.
+- Exit criteria: resolver produces a single canonical runtime config object for all commands.
+- Theory note: describe deterministic configuration layering for reproducible science runs.
+
+22. [Planned] [Engineering] Add built-in preset pack and init-config generator
+- Implement built-ins: `quicklook`, `science-default`, `deep-search`.
+- Add `init-config --from <preset> --out <file>`.
+- Persist preset id/version/hash into run manifest.
+- Exit criteria: users can scaffold valid config files from built-ins and run without low-level flags.
+- Theory note: document progressive disclosure via presets and controlled override paths.
+
+23. [Planned] [Engineering] Restructure CLI into command-oriented UX
+- Introduce explicit commands:
+  - `exohunt run --target ... --config ...`
+  - `exohunt batch --targets-file ... --config ...`
+  - `exohunt init-config --from ... --out ...`
+- Keep temporary compatibility path for `python -m exohunt.cli` with deprecation messaging.
+- Exit criteria: command-specific help is concise and mode-coupled validation runs before execution.
+- Theory note: explain command partitioning and reduction of parameter overload.
+
+24. [Planned] [Validation] Migration, testing, and deprecation hardening
+- Add tests for config parsing, preset resolution, and command behavior.
+- Add migration tests for removed parameters and legacy value mapping (`global -> stitched`).
+- Add deprecation/error messages with actionable replacements.
+- Exit criteria: legacy users get clear migration paths; new config workflow is test-covered and stable.
+- Theory note: describe backward-compatibility strategy and scientific reproducibility safeguards.
