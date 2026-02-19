@@ -12,6 +12,7 @@ from exohunt.cache import (
     _prepared_cache_path,
     _segment_prepared_cache_path,
     _safe_target_name,
+    _target_output_dir,
 )
 from exohunt.pipeline import fetch_and_plot
 from exohunt.plotting import _apply_time_window, _downsample_minmax, save_candidate_diagnostics
@@ -122,7 +123,9 @@ def test_fetch_and_plot_uses_cache(monkeypatch, tmp_path):
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path is None
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
-    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
+    assert (
+        tmp_path / "outputs/tic_261136679/metrics/preprocessing_summary.json"
+    ).exists()
 
 
 def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
@@ -151,7 +154,9 @@ def test_fetch_and_plot_uses_prepared_cache(monkeypatch, tmp_path):
     output_path = fetch_and_plot(target, cache_dir=cache_dir, preprocess_mode="global")
     assert output_path is None
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
-    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
+    assert (
+        tmp_path / "outputs/tic_261136679/metrics/preprocessing_summary.json"
+    ).exists()
 
 
 def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
@@ -195,7 +200,9 @@ def test_fetch_and_plot_downloads_and_caches(monkeypatch, tmp_path):
     segment_root = cache_dir / "segments" / "tic_261136679"
     assert segment_root.exists()
     assert (tmp_path / "outputs/metrics/preprocessing_summary.csv").exists()
-    assert (tmp_path / "outputs/metrics/tic_261136679_preprocessing_summary.json").exists()
+    assert (
+        tmp_path / "outputs/tic_261136679/metrics/preprocessing_summary.json"
+    ).exists()
 
 
 def test_fetch_and_plot_runs_bls_per_sector(monkeypatch, tmp_path):
@@ -367,6 +374,7 @@ def test_fetch_and_plot_generates_plot_when_time_window_provided(monkeypatch, tm
     )
     assert output_path is not None
     assert output_path.exists()
+    assert output_path.parent == Path("outputs/tic_261136679/plots")
 
 
 def test_preprocessing_summary_csv_column_order_stable(monkeypatch, tmp_path):
@@ -412,6 +420,13 @@ def test_preprocessing_summary_csv_column_order_stable(monkeypatch, tmp_path):
         rows = list(reader)
         assert reader.fieldnames == pipeline._PREPROCESSING_SUMMARY_COLUMNS
 
+    target_csv_path = tmp_path / "outputs/tic_1/metrics/preprocessing_summary.csv"
+    with target_csv_path.open("r", encoding="utf-8", newline="") as handle:
+        reader = csv.DictReader(handle)
+        target_rows = list(reader)
+        assert reader.fieldnames == pipeline._PREPROCESSING_SUMMARY_COLUMNS
+
+    assert len(target_rows) == 2
     assert len(rows) == 2
     assert float(rows[0]["raw_rms"]) == 1.0
     assert float(rows[0]["prepared_rms"]) == 0.5
@@ -630,6 +645,8 @@ def test_save_candidate_diagnostics_writes_assets(monkeypatch, tmp_path):
     periodogram_path, phasefold_path = written[0]
     assert periodogram_path.exists()
     assert phasefold_path.exists()
+    assert periodogram_path.parent == _target_output_dir("TIC 1") / "diagnostics"
+    assert phasefold_path.parent == _target_output_dir("TIC 1") / "diagnostics"
 
 
 def test_write_bls_candidates_outputs_structured_files(monkeypatch, tmp_path):
@@ -679,6 +696,8 @@ def test_write_bls_candidates_outputs_structured_files(monkeypatch, tmp_path):
 
     assert csv_path.exists()
     assert json_path.exists()
+    assert csv_path.parent == _target_output_dir("TIC 1") / "candidates"
+    assert json_path.parent == _target_output_dir("TIC 1") / "candidates"
     with csv_path.open("r", encoding="utf-8", newline="") as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)

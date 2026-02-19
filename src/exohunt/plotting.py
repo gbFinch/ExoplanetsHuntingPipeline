@@ -7,7 +7,7 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 from exohunt.bls import BLSCandidate
-from exohunt.cache import _safe_target_name
+from exohunt.cache import _safe_target_name, _target_artifact_dir
 
 
 def _relative_flux_to_ppm(relative_flux: np.ndarray) -> np.ndarray:
@@ -148,7 +148,7 @@ def save_raw_vs_prepared_plot(
     plot_time_start: float | None = None,
     plot_time_end: float | None = None,
 ) -> Path:
-    output_dir = Path("outputs/plots")
+    output_dir = _target_artifact_dir(target, "plots")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{_safe_target_name(target)}_prepared.png"
 
@@ -248,7 +248,7 @@ def save_raw_vs_prepared_plot_interactive(
             "Interactive plotting requires plotly. Install it to use --interactive-html."
         ) from exc
 
-    output_dir = Path("outputs/plots")
+    output_dir = _target_artifact_dir(target, "plots")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = output_dir / f"{_safe_target_name(target)}_prepared.html"
 
@@ -395,7 +395,7 @@ def save_candidate_diagnostics(
     period_grid_days: np.ndarray,
     power_grid: np.ndarray,
 ) -> list[tuple[Path, Path]]:
-    output_dir = Path("outputs/diagnostics")
+    output_dir = _target_artifact_dir(target, "diagnostics")
     output_dir.mkdir(parents=True, exist_ok=True)
     time = np.asarray(lc_prepared.time.value, dtype=float)
     flux = np.asarray(lc_prepared.flux.value, dtype=float)

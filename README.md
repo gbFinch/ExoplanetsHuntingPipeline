@@ -53,7 +53,7 @@ You can also generate a plot by sector selection (per-sector mode):
 python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --plot-sectors 14,15
 ```
 
-The output plot is saved as `outputs/plots/<target>_prepared.png`.
+The output plot is saved as `outputs/<target>/plots/<target>_prepared.png`.
 
 BLS transit-search core runs by default on prepared light curves (top candidates are logged):
 
@@ -67,18 +67,19 @@ To run BLS independently per prepared sector (instead of stitched):
 python -m exohunt.cli --target "TIC 261136679" --preprocess-mode per-sector --bls-mode per-sector
 ```
 
-Each run writes ranked BLS candidate tables to `outputs/candidates/` as deterministic
+Each run writes ranked BLS candidate tables to `outputs/<target>/candidates/` as deterministic
 CSV/JSON files keyed by target and run configuration.
 Candidate rows also include vetting flags/reasons (`pass_min_transit_count`,
 `pass_odd_even_depth`, `pass_alias_harmonic`, `vetting_pass`, `vetting_reasons`).
 
-When BLS candidates exist, per-candidate diagnostics are written to `outputs/diagnostics/`:
+When BLS candidates exist, per-candidate diagnostics are written to `outputs/<target>/diagnostics/`:
 - periodogram plots with candidate period marker
 - phase-folded light curves with transit-window overlays
 
 Each run also writes preprocessing quality metrics to:
 - `outputs/metrics/preprocessing_summary.csv` (append-only run table)
-- `outputs/metrics/<target>_preprocessing_summary.json` (latest per-target summary)
+- `outputs/<target>/metrics/preprocessing_summary.csv` (per-target run table)
+- `outputs/<target>/metrics/preprocessing_summary.json` (latest per-target summary)
 
 Build preprocessing method comparison report (selects recommended defaults by cadence/span):
 
@@ -88,3 +89,5 @@ python -m exohunt.comparison \
   --cache-dir outputs/cache/lightcurves \
   --report-path outputs/reports/preprocessing-method-comparison.md
 ```
+
+Examples: TIC 139270665, TIC 172900988, TIC 261136679

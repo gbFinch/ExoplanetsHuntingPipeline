@@ -15,6 +15,17 @@ def _safe_target_name(target: str) -> str:
     return "".join(ch if ch.isalnum() else "_" for ch in target).strip("_").lower()
 
 
+def _target_output_dir(target: str, outputs_root: Path | None = None) -> Path:
+    root = outputs_root if outputs_root is not None else Path("outputs")
+    return root / _safe_target_name(target)
+
+
+def _target_artifact_dir(
+    target: str, artifact_name: str, outputs_root: Path | None = None
+) -> Path:
+    return _target_output_dir(target=target, outputs_root=outputs_root) / artifact_name
+
+
 def _cache_path(target: str, cache_dir: Path) -> Path:
     return cache_dir / f"{_safe_target_name(target)}.npz"
 

@@ -22,6 +22,7 @@ from exohunt.cache import (
     _segment_base_dir,
     _segment_prepared_cache_path,
     _segment_raw_cache_path,
+    _target_artifact_dir,
     _write_segment_manifest,
 )
 from exohunt.bls import (
@@ -162,8 +163,10 @@ def _write_preprocessing_metrics(
     data_source: str,
     metrics: dict[str, float | int | str],
 ) -> tuple[Path, Path]:
-    output_dir = Path("outputs/metrics")
-    output_dir.mkdir(parents=True, exist_ok=True)
+    aggregate_output_dir = Path("outputs/metrics")
+    aggregate_output_dir.mkdir(parents=True, exist_ok=True)
+    target_output_dir = _target_artifact_dir(target, "metrics")
+    target_output_dir.mkdir(parents=True, exist_ok=True)
     run_utc = datetime.now(tz=timezone.utc).isoformat()
 
     row = {
@@ -180,7 +183,7 @@ def _write_preprocessing_metrics(
             raise KeyError(f"Missing preprocessing metric key: {key}")
         row[key] = metrics[key]
 
-    csv_path = output_dir / "preprocessing_summary.csv"
+    csv_path = aggregate_output_dir / "preprocessing_summary.csv"
     write_header = not csv_path.exists()
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=_PREPROCESSING_SUMMARY_COLUMNS)
@@ -188,7 +191,15 @@ def _write_preprocessing_metrics(
             writer.writeheader()
         writer.writerow(row)
 
-    json_path = output_dir / f"{_safe_target_name(target)}_preprocessing_summary.json"
+    target_csv_path = target_output_dir / "preprocessing_summary.csv"
+    target_write_header = not target_csv_path.exists()
+    with target_csv_path.open("a", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_PREPROCESSING_SUMMARY_COLUMNS)
+        if target_write_header:
+            writer.writeheader()
+        writer.writerow(row)
+
+    json_path = target_output_dir / "preprocessing_summary.json"
     json_path.write_text(json.dumps(row, indent=2, sort_keys=True), encoding="utf-8")
     return csv_path, json_path
 
@@ -267,7 +278,7 @@ def _write_bls_candidates(
     candidates: list[BLSCandidate],
     vetting_by_rank: dict[int, CandidateVettingResult] | None = None,
 ) -> tuple[Path, Path]:
-    output_dir = Path("outputs/candidates")
+    output_dir = _target_artifact_dir(target, "candidates")
     output_dir.mkdir(parents=True, exist_ok=True)
     base_name = f"{_safe_target_name(target)}__bls_{output_key}"
     csv_path = output_dir / f"{base_name}.csv"

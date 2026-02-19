@@ -7,6 +7,7 @@ __pycache__/
 .cache/
 .docs/
 src/*.egg-info/
+outputs/
 outputs/plots/
 outputs/cache/
 outputs/metrics/
