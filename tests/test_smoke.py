@@ -425,6 +425,50 @@ def test_fetch_and_plot_manifest_comparison_key_stable_for_same_settings(monkeyp
     assert rows[0]["comparison_key"] == rows[1]["comparison_key"]
 
 
+def test_fetch_and_plot_manifest_includes_preset_metadata(monkeypatch, tmp_path):
+    target = "TIC 261136679"
+    cache_dir = tmp_path / "cache"
+    prepared_cache = _prepared_cache_path(
+        target=target,
+        cache_dir=cache_dir,
+        outlier_sigma=5.0,
+        flatten_window_length=401,
+        no_flatten=False,
+    )
+    prepared_cache.parent.mkdir(parents=True, exist_ok=True)
+    np.savez(
+        prepared_cache,
+        time=np.asarray([1.0, 2.0, 3.0, 4.0]),
+        flux=np.asarray([1.0, 0.999, 1.001, 1.0]),
+    )
+
+    def _unexpected_search(*args, **kwargs):
+        raise AssertionError("search_lightcurve should not be called on prepared cache hit")
+
+    monkeypatch.setattr(pipeline.lk, "search_lightcurve", _unexpected_search)
+    monkeypatch.chdir(tmp_path)
+
+    fetch_and_plot(
+        target,
+        cache_dir=cache_dir,
+        preprocess_mode="global",
+        config_schema_version=1,
+        config_preset_id="science-default",
+        config_preset_version=1,
+        config_preset_hash="abc123def4567890",
+    )
+
+    manifest_dir = tmp_path / "outputs/tic_261136679/manifests"
+    manifest_files = sorted(manifest_dir.glob("*.json"))
+    assert len(manifest_files) == 1
+    payload = json.loads(manifest_files[0].read_text(encoding="utf-8"))
+    config = payload["config"]
+    assert config["config_schema_version"] == 1
+    assert config["config_preset_id"] == "science-default"
+    assert config["config_preset_version"] == 1
+    assert config["config_preset_hash"] == "abc123def4567890"
+
+
 def test_run_batch_analysis_resumable_and_failure_isolated(monkeypatch, tmp_path):
     monkeypatch.chdir(tmp_path)
 

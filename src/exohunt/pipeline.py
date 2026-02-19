@@ -629,6 +629,7 @@ def run_batch_analysis(
     authors: str | None = None,
     interactive_html: bool = False,
     interactive_max_points: int = 200_000,
+    plot_enabled: bool = True,
     plot_mode: str = "stitched",
     run_bls: bool = True,
     bls_period_min_days: float = 0.5,
@@ -639,6 +640,10 @@ def run_batch_analysis(
     bls_n_durations: int = 12,
     bls_top_n: int = 5,
     bls_mode: str = "stitched",
+    config_schema_version: int = 1,
+    config_preset_id: str | None = None,
+    config_preset_version: int | None = None,
+    config_preset_hash: str | None = None,
     resume: bool = False,
     state_path: Path | None = None,
     status_path: Path | None = None,
@@ -699,6 +704,7 @@ def run_batch_analysis(
                 authors=authors,
                 interactive_html=interactive_html,
                 interactive_max_points=interactive_max_points,
+                plot_enabled=plot_enabled,
                 plot_mode=plot_mode,
                 run_bls=run_bls,
                 bls_period_min_days=bls_period_min_days,
@@ -709,6 +715,10 @@ def run_batch_analysis(
                 bls_n_durations=bls_n_durations,
                 bls_top_n=bls_top_n,
                 bls_mode=bls_mode,
+                config_schema_version=config_schema_version,
+                config_preset_id=config_preset_id,
+                config_preset_version=config_preset_version,
+                config_preset_hash=config_preset_hash,
             )
             completed.add(target)
             failed.discard(target)
@@ -765,6 +775,7 @@ def fetch_and_plot(
     authors: str | None = None,
     interactive_html: bool = False,
     interactive_max_points: int = 200_000,
+    plot_enabled: bool = True,
     plot_mode: str = "stitched",
     run_bls: bool = True,
     bls_period_min_days: float = 0.5,
@@ -775,6 +786,10 @@ def fetch_and_plot(
     bls_n_durations: int = 12,
     bls_top_n: int = 5,
     bls_mode: str = "stitched",
+    config_schema_version: int = 1,
+    config_preset_id: str | None = None,
+    config_preset_version: int | None = None,
+    config_preset_hash: str | None = None,
 ) -> Path | None:
     """Fetch, preprocess, analyze, and optionally plot a target light curve.
 
@@ -1352,74 +1367,77 @@ def fetch_and_plot(
     # axis/sector flags and makes output intent explicit and reproducible.
     output_paths: list[Path] = []
     interactive_paths: list[Path] = []
-    LOGGER.info("Step 7/7: generating plot(s)")
-    step_started = perf_counter()
-    if plot_mode == "stitched":
-        output_paths.append(
-            save_raw_vs_prepared_plot(
-                target=target,
-                lc_raw=lc,
-                lc_prepared=lc_prepared,
-                boundaries=boundaries,
-                output_key="stitched",
-            )
-        )
-        if interactive_html:
-            interactive_paths.append(
-                save_raw_vs_prepared_plot_interactive(
+    if plot_enabled:
+        LOGGER.info("Step 7/7: generating plot(s)")
+        step_started = perf_counter()
+        if plot_mode == "stitched":
+            output_paths.append(
+                save_raw_vs_prepared_plot(
                     target=target,
                     lc_raw=lc,
                     lc_prepared=lc_prepared,
                     boundaries=boundaries,
-                    max_points=interactive_max_points,
                     output_key="stitched",
-                )
-            )
-    elif plot_mode == "per-sector":
-        if (
-            preprocess_mode != "per-sector"
-            or not raw_segments_for_plot
-            or not prepared_segments_for_plot
-        ):
-            raise RuntimeError(
-                "Plot mode 'per-sector' requires preprocess mode 'per-sector' with segment data."
-            )
-        prepared_by_id = {segment.segment_id: segment for segment in prepared_segments_for_plot}
-        ordered_raw = sorted(
-            raw_segments_for_plot, key=lambda item: (int(item.sector), item.segment_id)
-        )
-        for raw_segment in ordered_raw:
-            prepared_segment = prepared_by_id.get(raw_segment.segment_id)
-            if prepared_segment is None:
-                continue
-            output_paths.append(
-                save_raw_vs_prepared_plot(
-                    target=target,
-                    lc_raw=raw_segment.lc,
-                    lc_prepared=prepared_segment.lc,
-                    boundaries=[],
-                    output_key=raw_segment.segment_id,
                 )
             )
             if interactive_html:
                 interactive_paths.append(
                     save_raw_vs_prepared_plot_interactive(
                         target=target,
+                        lc_raw=lc,
+                        lc_prepared=lc_prepared,
+                        boundaries=boundaries,
+                        max_points=interactive_max_points,
+                        output_key="stitched",
+                    )
+                )
+        elif plot_mode == "per-sector":
+            if (
+                preprocess_mode != "per-sector"
+                or not raw_segments_for_plot
+                or not prepared_segments_for_plot
+            ):
+                raise RuntimeError(
+                    "Plot mode 'per-sector' requires preprocess mode 'per-sector' with segment data."
+                )
+            prepared_by_id = {segment.segment_id: segment for segment in prepared_segments_for_plot}
+            ordered_raw = sorted(
+                raw_segments_for_plot, key=lambda item: (int(item.sector), item.segment_id)
+            )
+            for raw_segment in ordered_raw:
+                prepared_segment = prepared_by_id.get(raw_segment.segment_id)
+                if prepared_segment is None:
+                    continue
+                output_paths.append(
+                    save_raw_vs_prepared_plot(
+                        target=target,
                         lc_raw=raw_segment.lc,
                         lc_prepared=prepared_segment.lc,
                         boundaries=[],
-                        max_points=interactive_max_points,
                         output_key=raw_segment.segment_id,
                     )
                 )
+                if interactive_html:
+                    interactive_paths.append(
+                        save_raw_vs_prepared_plot_interactive(
+                            target=target,
+                            lc_raw=raw_segment.lc,
+                            lc_prepared=prepared_segment.lc,
+                            boundaries=[],
+                            max_points=interactive_max_points,
+                            output_key=raw_segment.segment_id,
+                        )
+                    )
+        else:
+            raise RuntimeError(f"Unsupported plot mode: {plot_mode}")
+        LOGGER.info(
+            "Plot complete in %.2fs (%d file%s)",
+            perf_counter() - step_started,
+            len(output_paths),
+            "" if len(output_paths) == 1 else "s",
+        )
     else:
-        raise RuntimeError(f"Unsupported plot mode: {plot_mode}")
-    LOGGER.info(
-        "Plot complete in %.2fs (%d file%s)",
-        perf_counter() - step_started,
-        len(output_paths),
-        "" if len(output_paths) == 1 else "s",
-    )
+        LOGGER.info("Step 7/7: skipping plot generation (plot.enabled=false)")
 
     run_finished_utc = datetime.now(tz=timezone.utc).isoformat()
     runtime_seconds = perf_counter() - started_at
@@ -1434,6 +1452,7 @@ def fetch_and_plot(
         "authors": authors if authors else "all",
         "interactive_html": bool(interactive_html),
         "interactive_max_points": int(interactive_max_points),
+        "plot_enabled": bool(plot_enabled),
         "plot_mode": plot_mode,
         "run_bls": bool(run_bls),
         "bls_mode": bls_mode,
@@ -1444,6 +1463,10 @@ def fetch_and_plot(
         "bls_n_periods": int(bls_n_periods),
         "bls_n_durations": int(bls_n_durations),
         "bls_top_n": int(bls_top_n),
+        "config_schema_version": int(config_schema_version),
+        "config_preset_id": config_preset_id if config_preset_id else "none",
+        "config_preset_version": int(config_preset_version) if config_preset_version else 0,
+        "config_preset_hash": config_preset_hash if config_preset_hash else "",
     }
     data_payload: dict[str, str | int | float | bool] = {
         "target": target,
@@ -1516,6 +1539,7 @@ def fetch_and_plot(
     )
     LOGGER.info("Author filter: %s", authors if authors else "all")
     LOGGER.info("Plot mode: %s", plot_mode)
+    LOGGER.info("Plot enabled: %s", plot_enabled)
     LOGGER.info("Interactive HTML: %s", interactive_html)
     LOGGER.info("Interactive max points: %d", interactive_max_points)
     LOGGER.info(
@@ -1563,6 +1587,13 @@ def fetch_and_plot(
     LOGGER.info("Saved preprocessing metrics JSON: %s", metrics_json_path)
     LOGGER.info("Metrics cache file: %s", metrics_cache_path)
     LOGGER.info("Saved run manifest JSON: %s", manifest_path)
+    if config_preset_id:
+        LOGGER.info(
+            "Config preset: id=%s version=%s hash=%s",
+            config_preset_id,
+            config_preset_version,
+            config_preset_hash,
+        )
     LOGGER.info("Saved run manifest index CSV (global): %s", manifest_global_index_path)
     LOGGER.info("Saved run manifest index CSV (target): %s", manifest_target_index_path)
     LOGGER.info("Saved BLS candidate CSV files: %d", len(candidate_csv_paths))

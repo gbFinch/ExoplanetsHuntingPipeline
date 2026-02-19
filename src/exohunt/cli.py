@@ -6,7 +6,13 @@ import argparse
 import logging
 from pathlib import Path
 
-from exohunt.config import ConfigValidationError, resolve_runtime_config
+from exohunt.config import (
+    ConfigValidationError,
+    get_builtin_preset_metadata,
+    list_builtin_presets,
+    resolve_runtime_config,
+    write_preset_config,
+)
 from exohunt.pipeline import fetch_and_plot, run_batch_analysis
 
 
@@ -15,6 +21,22 @@ DEFAULT_TARGET = "TIC 261136679"
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Download and plot a TESS light curve.")
+    parser.add_argument(
+        "--config",
+        default=None,
+        help="Preset name (quicklook/science-default/deep-search) or config TOML path.",
+    )
+    parser.add_argument(
+        "--init-config-from",
+        default=None,
+        choices=list_builtin_presets(),
+        help="Write a starter config file from a built-in preset and exit.",
+    )
+    parser.add_argument(
+        "--init-config-out",
+        default=None,
+        help="Destination path for --init-config-from output.",
+    )
     parser.add_argument(
         "--target", default=DEFAULT_TARGET, help="Target name, e.g. 'TIC 261136679'."
     )
@@ -162,45 +184,79 @@ def _load_batch_targets(path: Path) -> list[str]:
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args()
+    available_presets = set(list_builtin_presets())
 
-    cli_overrides = {
-        "io": {"refresh_cache": bool(args.refresh_cache)},
-        "ingest": {
-            "authors": [
-                author.strip().upper() for author in str(args.authors).split(",") if author.strip()
-            ]
-        },
-        "preprocess": {
-            "enabled": bool(not args.no_preprocess),
-            "mode": str(args.preprocess_mode),
-            "outlier_sigma": float(args.outlier_sigma),
-            "flatten_window_length": int(args.flatten_window_length),
-            "flatten": bool(not args.no_flatten),
-        },
-        "plot": {
-            "enabled": True,
-            "mode": str(args.plot_mode),
-            "interactive_html": bool(args.interactive_html),
-            "interactive_max_points": int(args.interactive_max_points),
-        },
-        "bls": {
-            "enabled": bool(not args.no_bls),
-            "mode": str(args.bls_mode),
-            "period_min_days": float(args.bls_period_min_days),
-            "period_max_days": float(args.bls_period_max_days),
-            "duration_min_hours": float(args.bls_duration_min_hours),
-            "duration_max_hours": float(args.bls_duration_max_hours),
-            "n_periods": int(args.bls_n_periods),
-            "n_durations": int(args.bls_n_durations),
-            "top_n": int(args.bls_top_n),
-        },
-    }
+    if args.init_config_from:
+        if not args.init_config_out:
+            raise RuntimeError("--init-config-out is required when using --init-config-from.")
+        output_path = write_preset_config(
+            preset_name=str(args.init_config_from),
+            out_path=Path(str(args.init_config_out)),
+        )
+        logging.info("Wrote preset config: %s", output_path)
+        return 0
+
+    preset_name: str | None = None
+    config_path: Path | None = None
+    if args.config:
+        config_ref = str(args.config).strip()
+        if config_ref in available_presets:
+            preset_name = config_ref
+        else:
+            config_path = Path(config_ref)
+
+    # Config-first behavior: when --config is used, low-level flags are ignored.
+    # This keeps preset/file runs deterministic until command-mode CLI introduces
+    # explicit per-key override semantics.
+    cli_overrides = None
+    if not args.config:
+        cli_overrides = {
+            "io": {"refresh_cache": bool(args.refresh_cache)},
+            "ingest": {
+                "authors": [
+                    author.strip().upper()
+                    for author in str(args.authors).split(",")
+                    if author.strip()
+                ]
+            },
+            "preprocess": {
+                "enabled": bool(not args.no_preprocess),
+                "mode": str(args.preprocess_mode),
+                "outlier_sigma": float(args.outlier_sigma),
+                "flatten_window_length": int(args.flatten_window_length),
+                "flatten": bool(not args.no_flatten),
+            },
+            "plot": {
+                "enabled": True,
+                "mode": str(args.plot_mode),
+                "interactive_html": bool(args.interactive_html),
+                "interactive_max_points": int(args.interactive_max_points),
+            },
+            "bls": {
+                "enabled": bool(not args.no_bls),
+                "mode": str(args.bls_mode),
+                "period_min_days": float(args.bls_period_min_days),
+                "period_max_days": float(args.bls_period_max_days),
+                "duration_min_hours": float(args.bls_duration_min_hours),
+                "duration_max_hours": float(args.bls_duration_max_hours),
+                "n_periods": int(args.bls_n_periods),
+                "n_durations": int(args.bls_n_durations),
+                "top_n": int(args.bls_top_n),
+            },
+        }
     try:
-        runtime_config = resolve_runtime_config(cli_overrides=cli_overrides)
+        runtime_config = resolve_runtime_config(
+            config_path=config_path,
+            preset_name=preset_name,
+            cli_overrides=cli_overrides,
+        )
     except ConfigValidationError as exc:
         raise RuntimeError(f"Invalid runtime configuration: {exc}") from exc
 
     authors = ",".join(runtime_config.ingest.authors) if runtime_config.ingest.authors else None
+    preset_meta = (None, None, None)
+    if runtime_config.preset is not None and runtime_config.preset in available_presets:
+        preset_meta = get_builtin_preset_metadata(runtime_config.preset)
 
     if args.batch_targets_file:
         batch_targets_file = Path(args.batch_targets_file)
@@ -218,6 +274,7 @@ def main() -> int:
             authors=authors,
             interactive_html=runtime_config.plot.interactive_html,
             interactive_max_points=runtime_config.plot.interactive_max_points,
+            plot_enabled=runtime_config.plot.enabled,
             plot_mode=runtime_config.plot.mode,
             run_bls=runtime_config.bls.enabled,
             bls_period_min_days=runtime_config.bls.period_min_days,
@@ -228,6 +285,10 @@ def main() -> int:
             bls_n_durations=runtime_config.bls.n_durations,
             bls_top_n=runtime_config.bls.top_n,
             bls_mode=runtime_config.bls.mode,
+            config_schema_version=runtime_config.schema_version,
+            config_preset_id=preset_meta[0],
+            config_preset_version=preset_meta[1],
+            config_preset_hash=preset_meta[2],
             resume=args.batch_resume,
             state_path=Path(args.batch_state_path) if args.batch_state_path else None,
             status_path=Path(args.batch_status_path) if args.batch_status_path else None,
@@ -244,6 +305,7 @@ def main() -> int:
             authors=authors,
             interactive_html=runtime_config.plot.interactive_html,
             interactive_max_points=runtime_config.plot.interactive_max_points,
+            plot_enabled=runtime_config.plot.enabled,
             plot_mode=runtime_config.plot.mode,
             run_bls=runtime_config.bls.enabled,
             bls_period_min_days=runtime_config.bls.period_min_days,
@@ -254,6 +316,10 @@ def main() -> int:
             bls_n_durations=runtime_config.bls.n_durations,
             bls_top_n=runtime_config.bls.top_n,
             bls_mode=runtime_config.bls.mode,
+            config_schema_version=runtime_config.schema_version,
+            config_preset_id=preset_meta[0],
+            config_preset_version=preset_meta[1],
+            config_preset_hash=preset_meta[2],
         )
     return 0
 

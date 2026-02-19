@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from copy import deepcopy
 from dataclasses import dataclass
+import hashlib
+import json
 from pathlib import Path
 from typing import Any, Mapping
 
@@ -12,6 +14,7 @@ except ModuleNotFoundError:  # pragma: no cover
 
 
 _ALLOWED_MODE_VALUES = {"stitched", "per-sector"}
+BUILTIN_PRESET_PACK_VERSION = 1
 
 
 class ConfigValidationError(ValueError):
@@ -103,6 +106,164 @@ _DEFAULTS: dict[str, Any] = {
         "top_n": 5,
     },
 }
+
+_BUILTIN_PRESETS: dict[str, dict[str, Any]] = {
+    "quicklook": {
+        "io": {"refresh_cache": False},
+        "ingest": {"authors": ["SPOC"]},
+        "preprocess": {
+            "enabled": True,
+            "mode": "per-sector",
+            "outlier_sigma": 6.0,
+            "flatten_window_length": 201,
+            "flatten": True,
+        },
+        "plot": {
+            "enabled": True,
+            "mode": "stitched",
+            "interactive_html": False,
+            "interactive_max_points": 120_000,
+        },
+        "bls": {
+            "enabled": True,
+            "mode": "stitched",
+            "period_min_days": 0.8,
+            "period_max_days": 12.0,
+            "duration_min_hours": 0.75,
+            "duration_max_hours": 8.0,
+            "n_periods": 1200,
+            "n_durations": 10,
+            "top_n": 3,
+        },
+    },
+    "science-default": {
+        "io": {"refresh_cache": False},
+        "ingest": {"authors": ["SPOC"]},
+        "preprocess": {
+            "enabled": True,
+            "mode": "per-sector",
+            "outlier_sigma": 5.0,
+            "flatten_window_length": 401,
+            "flatten": True,
+        },
+        "plot": {
+            "enabled": False,
+            "mode": "stitched",
+            "interactive_html": False,
+            "interactive_max_points": 200_000,
+        },
+        "bls": {
+            "enabled": True,
+            "mode": "stitched",
+            "period_min_days": 0.5,
+            "period_max_days": 20.0,
+            "duration_min_hours": 0.5,
+            "duration_max_hours": 10.0,
+            "n_periods": 2000,
+            "n_durations": 12,
+            "top_n": 5,
+        },
+    },
+    "deep-search": {
+        "io": {"refresh_cache": False},
+        "ingest": {"authors": ["SPOC"]},
+        "preprocess": {
+            "enabled": True,
+            "mode": "per-sector",
+            "outlier_sigma": 4.0,
+            "flatten_window_length": 801,
+            "flatten": True,
+        },
+        "plot": {
+            "enabled": False,
+            "mode": "stitched",
+            "interactive_html": True,
+            "interactive_max_points": 300_000,
+        },
+        "bls": {
+            "enabled": True,
+            "mode": "stitched",
+            "period_min_days": 0.3,
+            "period_max_days": 40.0,
+            "duration_min_hours": 0.5,
+            "duration_max_hours": 12.0,
+            "n_periods": 8000,
+            "n_durations": 20,
+            "top_n": 10,
+        },
+    },
+}
+
+
+def list_builtin_presets() -> tuple[str, ...]:
+    return tuple(sorted(_BUILTIN_PRESETS))
+
+
+def _stable_hash(payload: Mapping[str, Any]) -> str:
+    encoded = json.dumps(payload, sort_keys=True).encode("utf-8")
+    return hashlib.sha1(encoded).hexdigest()[:16]
+
+
+def get_builtin_preset_metadata(name: str) -> tuple[str, int, str]:
+    preset_values = _BUILTIN_PRESETS.get(name)
+    if preset_values is None:
+        available = ", ".join(list_builtin_presets())
+        raise ConfigValidationError(f"Unknown preset: {name!r}. Available presets: {available}.")
+    preset_hash = _stable_hash(
+        {
+            "pack_version": BUILTIN_PRESET_PACK_VERSION,
+            "schema_version": _DEFAULTS["schema_version"],
+            "preset": name,
+            "values": preset_values,
+        }
+    )
+    return name, BUILTIN_PRESET_PACK_VERSION, preset_hash
+
+
+def _encode_toml_value(value: Any) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, str):
+        escaped = value.replace('"', '\\"')
+        return f'"{escaped}"'
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return f"{value:.10g}"
+    if isinstance(value, list):
+        return "[" + ", ".join(_encode_toml_value(item) for item in value) + "]"
+    raise TypeError(f"Unsupported TOML value type: {type(value).__name__}")
+
+
+def _dump_toml(payload: Mapping[str, Any]) -> str:
+    lines: list[str] = []
+    scalar_keys = ["schema_version", "preset"]
+    for key in scalar_keys:
+        if key in payload:
+            lines.append(f"{key} = {_encode_toml_value(payload[key])}")
+    for section in ["io", "ingest", "preprocess", "plot", "bls"]:
+        value = payload.get(section)
+        if not isinstance(value, Mapping):
+            continue
+        lines.append("")
+        lines.append(f"[{section}]")
+        for key, item in value.items():
+            lines.append(f"{key} = {_encode_toml_value(item)}")
+    return "\n".join(lines) + "\n"
+
+
+def write_preset_config(*, preset_name: str, out_path: Path) -> Path:
+    if preset_name not in _BUILTIN_PRESETS:
+        available = ", ".join(list_builtin_presets())
+        raise ConfigValidationError(
+            f"Unknown preset: {preset_name!r}. Available presets: {available}."
+        )
+    payload = deepcopy(_DEFAULTS)
+    _deep_merge(payload, _BUILTIN_PRESETS[preset_name], schema=_DEFAULTS, scope="preset")
+    payload["preset"] = preset_name
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_path.write_text(_dump_toml(payload), encoding="utf-8")
+    return out_path
 
 
 def _deep_merge(
@@ -232,9 +393,19 @@ def resolve_runtime_config(
     """
     merged: dict[str, Any] = deepcopy(_DEFAULTS)
     schema = _DEFAULTS
+    presets = dict(preset_values or _BUILTIN_PRESETS)
+
+    file_payload: dict[str, Any] = {}
+    file_preset: str | None = None
+    if config_path is not None:
+        file_payload = _load_toml(config_path)
+        if "preset" in file_payload:
+            file_preset = _expect_optional_string(file_payload["preset"], key_path="config.preset")
 
     active_preset: str | None = _expect_optional_string(preset_name, key_path="preset")
-    presets = dict(preset_values or {})
+    if active_preset is None:
+        active_preset = file_preset
+
     if active_preset is not None:
         if active_preset not in presets:
             available = ", ".join(sorted(presets)) if presets else "none"
@@ -249,8 +420,7 @@ def resolve_runtime_config(
         )
         merged["preset"] = active_preset
 
-    if config_path is not None:
-        file_payload = _load_toml(config_path)
+    if file_payload:
         _deep_merge(
             merged,
             file_payload,

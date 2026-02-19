@@ -4,7 +4,14 @@ from pathlib import Path
 
 import pytest
 
-from exohunt.config import ConfigValidationError, resolve_runtime_config
+from exohunt.config import (
+    BUILTIN_PRESET_PACK_VERSION,
+    ConfigValidationError,
+    get_builtin_preset_metadata,
+    list_builtin_presets,
+    resolve_runtime_config,
+    write_preset_config,
+)
 
 
 def test_resolve_runtime_config_uses_expected_merge_order(tmp_path: Path):
@@ -90,3 +97,39 @@ def test_resolve_runtime_config_requires_odd_flatten_window_length():
                 "preprocess": {"flatten_window_length": 400},
             }
         )
+
+
+def test_builtin_presets_available():
+    assert set(list_builtin_presets()) == {"deep-search", "quicklook", "science-default"}
+
+
+def test_resolve_runtime_config_with_builtin_preset():
+    cfg = resolve_runtime_config(preset_name="deep-search")
+    assert cfg.preset == "deep-search"
+    assert cfg.preprocess.flatten_window_length == 801
+    assert cfg.bls.n_periods == 8000
+    assert cfg.plot.interactive_html is True
+
+
+def test_resolve_runtime_config_reads_preset_from_file(tmp_path: Path):
+    config_path = tmp_path / "from-file.toml"
+    config_path.write_text('schema_version = 1\npreset = "quicklook"\n', encoding="utf-8")
+    cfg = resolve_runtime_config(config_path=config_path)
+    assert cfg.preset == "quicklook"
+    assert cfg.preprocess.outlier_sigma == pytest.approx(6.0)
+
+
+def test_write_preset_config(tmp_path: Path):
+    out_path = tmp_path / "configs" / "science-default.toml"
+    write_preset_config(preset_name="science-default", out_path=out_path)
+    content = out_path.read_text(encoding="utf-8")
+    assert 'preset = "science-default"' in content
+    assert "[preprocess]" in content
+    assert "flatten_window_length = 401" in content
+
+
+def test_get_builtin_preset_metadata_returns_stable_version_and_hash():
+    preset_id, preset_version, preset_hash = get_builtin_preset_metadata("science-default")
+    assert preset_id == "science-default"
+    assert preset_version == BUILTIN_PRESET_PACK_VERSION
+    assert len(preset_hash) == 16
