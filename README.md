@@ -93,6 +93,26 @@ Manifest payloads include run config, package versions, timestamps, and stable
 comparison keys (`comparison_key`, `config_hash`, `data_fingerprint_hash`) so
 reruns can be compared target-by-target.
 
+Run many targets with resumable batch mode:
+
+```bash
+python -m exohunt.cli --batch-targets-file .docs/targets.txt --batch-resume
+```
+
+Example `batch-targets` file (`.docs/targets.txt`):
+
+```text
+# One target per line. Blank lines and comments are ignored.
+TIC 261136679
+TIC 172900988
+TIC 139270665
+```
+
+Batch mode behavior:
+- per-target failure isolation (failed targets are recorded, batch continues)
+- resumable state file (`outputs/batch/*__state.json` or `--batch-state-path`)
+- per-run status reports (`.csv` + `.json`) under `outputs/batch/`
+
 Build preprocessing method comparison report (selects recommended defaults by cadence/span):
 
 ```bash

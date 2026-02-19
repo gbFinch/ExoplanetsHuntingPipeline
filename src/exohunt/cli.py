@@ -6,7 +6,7 @@ import argparse
 import logging
 from pathlib import Path
 
-from exohunt.pipeline import fetch_and_plot
+from exohunt.pipeline import fetch_and_plot, run_batch_analysis
 
 
 DEFAULT_TARGET = "TIC 261136679"
@@ -16,6 +16,26 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Download and plot a TESS light curve.")
     parser.add_argument(
         "--target", default=DEFAULT_TARGET, help="Target name, e.g. 'TIC 261136679'."
+    )
+    parser.add_argument(
+        "--batch-targets-file",
+        default=None,
+        help="Optional newline-delimited targets file for batch mode (one target per line).",
+    )
+    parser.add_argument(
+        "--batch-resume",
+        action="store_true",
+        help="Resume a prior batch run by skipping targets already marked completed in state.",
+    )
+    parser.add_argument(
+        "--batch-state-path",
+        default=None,
+        help="Optional path for batch resumable state JSON.",
+    )
+    parser.add_argument(
+        "--batch-status-path",
+        default=None,
+        help="Optional path for batch status CSV (JSON sidecar written next to it).",
     )
     parser.add_argument(
         "--cache-dir",
@@ -150,35 +170,80 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _load_batch_targets(path: Path) -> list[str]:
+    targets: list[str] = []
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        targets.append(line)
+    return targets
+
+
 def main() -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     args = build_parser().parse_args()
-    fetch_and_plot(
-        args.target,
-        cache_dir=Path(args.cache_dir),
-        refresh_cache=args.refresh_cache,
-        outlier_sigma=args.outlier_sigma,
-        flatten_window_length=args.flatten_window_length,
-        max_download_files=args.max_download_files,
-        no_flatten=args.no_flatten,
-        preprocess_mode=args.preprocess_mode,
-        sectors=args.sectors,
-        authors=args.authors,
-        interactive_html=args.interactive_html,
-        interactive_max_points=args.interactive_max_points,
-        plot_time_start=args.plot_time_start,
-        plot_time_end=args.plot_time_end,
-        plot_sectors=args.plot_sectors,
-        run_bls=not args.no_bls,
-        bls_period_min_days=args.bls_period_min_days,
-        bls_period_max_days=args.bls_period_max_days,
-        bls_duration_min_hours=args.bls_duration_min_hours,
-        bls_duration_max_hours=args.bls_duration_max_hours,
-        bls_n_periods=args.bls_n_periods,
-        bls_n_durations=args.bls_n_durations,
-        bls_top_n=args.bls_top_n,
-        bls_mode=args.bls_mode,
-    )
+    if args.batch_targets_file:
+        batch_targets_file = Path(args.batch_targets_file)
+        targets = _load_batch_targets(batch_targets_file)
+        if not targets:
+            raise RuntimeError(f"No targets found in batch file: {batch_targets_file}")
+        run_batch_analysis(
+            targets=targets,
+            cache_dir=Path(args.cache_dir),
+            refresh_cache=args.refresh_cache,
+            outlier_sigma=args.outlier_sigma,
+            flatten_window_length=args.flatten_window_length,
+            max_download_files=args.max_download_files,
+            no_flatten=args.no_flatten,
+            preprocess_mode=args.preprocess_mode,
+            sectors=args.sectors,
+            authors=args.authors,
+            interactive_html=args.interactive_html,
+            interactive_max_points=args.interactive_max_points,
+            plot_time_start=args.plot_time_start,
+            plot_time_end=args.plot_time_end,
+            plot_sectors=args.plot_sectors,
+            run_bls=not args.no_bls,
+            bls_period_min_days=args.bls_period_min_days,
+            bls_period_max_days=args.bls_period_max_days,
+            bls_duration_min_hours=args.bls_duration_min_hours,
+            bls_duration_max_hours=args.bls_duration_max_hours,
+            bls_n_periods=args.bls_n_periods,
+            bls_n_durations=args.bls_n_durations,
+            bls_top_n=args.bls_top_n,
+            bls_mode=args.bls_mode,
+            resume=args.batch_resume,
+            state_path=Path(args.batch_state_path) if args.batch_state_path else None,
+            status_path=Path(args.batch_status_path) if args.batch_status_path else None,
+        )
+    else:
+        fetch_and_plot(
+            args.target,
+            cache_dir=Path(args.cache_dir),
+            refresh_cache=args.refresh_cache,
+            outlier_sigma=args.outlier_sigma,
+            flatten_window_length=args.flatten_window_length,
+            max_download_files=args.max_download_files,
+            no_flatten=args.no_flatten,
+            preprocess_mode=args.preprocess_mode,
+            sectors=args.sectors,
+            authors=args.authors,
+            interactive_html=args.interactive_html,
+            interactive_max_points=args.interactive_max_points,
+            plot_time_start=args.plot_time_start,
+            plot_time_end=args.plot_time_end,
+            plot_sectors=args.plot_sectors,
+            run_bls=not args.no_bls,
+            bls_period_min_days=args.bls_period_min_days,
+            bls_period_max_days=args.bls_period_max_days,
+            bls_duration_min_hours=args.bls_duration_min_hours,
+            bls_duration_max_hours=args.bls_duration_max_hours,
+            bls_n_periods=args.bls_n_periods,
+            bls_n_durations=args.bls_n_durations,
+            bls_top_n=args.bls_top_n,
+            bls_mode=args.bls_mode,
+        )
     return 0
 
 

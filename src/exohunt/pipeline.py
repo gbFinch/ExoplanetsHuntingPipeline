@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 from dataclasses import asdict
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from importlib.metadata import PackageNotFoundError, version as package_version
 from pathlib import Path
@@ -131,6 +132,25 @@ _MANIFEST_INDEX_COLUMNS = [
     "diagnostic_asset_count",
     "manifest_path",
 ]
+
+_BATCH_STATUS_COLUMNS = [
+    "run_utc",
+    "target",
+    "status",
+    "error",
+    "runtime_seconds",
+    "output_path",
+]
+
+
+@dataclass(frozen=True)
+class BatchTargetStatus:
+    run_utc: str
+    target: str
+    status: str
+    error: str
+    runtime_seconds: float
+    output_path: str
 
 
 def _hash_payload(payload: dict[str, object]) -> str:
@@ -502,6 +522,203 @@ def _write_bls_candidates(
         payload["candidates"].append(row)
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return csv_path, json_path
+
+
+def _default_batch_state_path(targets_file: Path | None = None) -> Path:
+    if targets_file is None:
+        return Path("outputs/batch/run_state.json")
+    return Path("outputs/batch") / f"{targets_file.stem}__state.json"
+
+
+def _default_batch_status_path(targets_file: Path | None = None) -> Path:
+    if targets_file is None:
+        return Path("outputs/batch/run_status.csv")
+    return Path("outputs/batch") / f"{targets_file.stem}__status.csv"
+
+
+def _load_batch_state(state_path: Path) -> dict[str, object]:
+    if not state_path.exists():
+        return {
+            "schema_version": 1,
+            "created_utc": datetime.now(tz=timezone.utc).isoformat(),
+            "last_updated_utc": "",
+            "completed_targets": [],
+            "failed_targets": [],
+            "errors": {},
+        }
+    payload = json.loads(state_path.read_text(encoding="utf-8"))
+    if not isinstance(payload, dict):
+        raise RuntimeError(f"Invalid batch state payload: {state_path}")
+    payload.setdefault("schema_version", 1)
+    payload.setdefault("created_utc", datetime.now(tz=timezone.utc).isoformat())
+    payload.setdefault("last_updated_utc", "")
+    payload.setdefault("completed_targets", [])
+    payload.setdefault("failed_targets", [])
+    payload.setdefault("errors", {})
+    return payload
+
+
+def _save_batch_state(state_path: Path, payload: dict[str, object]) -> None:
+    state_path.parent.mkdir(parents=True, exist_ok=True)
+    payload["last_updated_utc"] = datetime.now(tz=timezone.utc).isoformat()
+    state_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+
+
+def _write_batch_status_report(
+    status_path: Path,
+    statuses: list[BatchTargetStatus],
+) -> tuple[Path, Path]:
+    status_path.parent.mkdir(parents=True, exist_ok=True)
+    with status_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_BATCH_STATUS_COLUMNS)
+        writer.writeheader()
+        for item in statuses:
+            writer.writerow(asdict(item))
+    json_path = status_path.with_suffix(".json")
+    json_path.write_text(
+        json.dumps([asdict(item) for item in statuses], indent=2, sort_keys=True), encoding="utf-8"
+    )
+    return status_path, json_path
+
+
+def run_batch_analysis(
+    targets: list[str],
+    *,
+    cache_dir: Path,
+    refresh_cache: bool = False,
+    outlier_sigma: float = 5.0,
+    flatten_window_length: int = 401,
+    max_download_files: int | None = None,
+    no_flatten: bool = False,
+    preprocess_mode: str = "per-sector",
+    sectors: str | None = None,
+    authors: str | None = None,
+    interactive_html: bool = False,
+    interactive_max_points: int = 200_000,
+    plot_time_start: float | None = None,
+    plot_time_end: float | None = None,
+    plot_sectors: str | None = None,
+    run_bls: bool = True,
+    bls_period_min_days: float = 0.5,
+    bls_period_max_days: float = 20.0,
+    bls_duration_min_hours: float = 0.5,
+    bls_duration_max_hours: float = 10.0,
+    bls_n_periods: int = 2000,
+    bls_n_durations: int = 12,
+    bls_top_n: int = 5,
+    bls_mode: str = "stitched",
+    resume: bool = False,
+    state_path: Path | None = None,
+    status_path: Path | None = None,
+) -> tuple[Path, Path, Path]:
+    """Run analysis for many targets with failure isolation and resumable state.
+
+    Theory: batch workflows should make forward progress even when individual
+    targets fail. Persisting per-target completion state enables resumability,
+    while a status report captures deterministic run outcomes for auditing.
+    """
+    unique_targets = [item.strip() for item in targets if item.strip()]
+    deduped_targets: list[str] = []
+    seen: set[str] = set()
+    for target in unique_targets:
+        if target in seen:
+            continue
+        deduped_targets.append(target)
+        seen.add(target)
+
+    state_path = state_path or _default_batch_state_path()
+    status_path = status_path or _default_batch_status_path()
+    state_payload = _load_batch_state(state_path)
+    completed = set(str(item) for item in state_payload.get("completed_targets", []))
+    failed = set(str(item) for item in state_payload.get("failed_targets", []))
+    errors = dict(state_payload.get("errors", {}))
+
+    statuses: list[BatchTargetStatus] = []
+    run_utc = datetime.now(tz=timezone.utc).isoformat()
+    total = len(deduped_targets)
+    for idx, target in enumerate(deduped_targets, start=1):
+        if resume and target in completed:
+            statuses.append(
+                BatchTargetStatus(
+                    run_utc=run_utc,
+                    target=target,
+                    status="skipped_completed",
+                    error="",
+                    runtime_seconds=0.0,
+                    output_path="",
+                )
+            )
+            _render_progress("Batch targets", idx, total)
+            continue
+
+        target_started = perf_counter()
+        try:
+            output_path = fetch_and_plot(
+                target=target,
+                cache_dir=cache_dir,
+                refresh_cache=refresh_cache,
+                outlier_sigma=outlier_sigma,
+                flatten_window_length=flatten_window_length,
+                max_download_files=max_download_files,
+                no_flatten=no_flatten,
+                preprocess_mode=preprocess_mode,
+                sectors=sectors,
+                authors=authors,
+                interactive_html=interactive_html,
+                interactive_max_points=interactive_max_points,
+                plot_time_start=plot_time_start,
+                plot_time_end=plot_time_end,
+                plot_sectors=plot_sectors,
+                run_bls=run_bls,
+                bls_period_min_days=bls_period_min_days,
+                bls_period_max_days=bls_period_max_days,
+                bls_duration_min_hours=bls_duration_min_hours,
+                bls_duration_max_hours=bls_duration_max_hours,
+                bls_n_periods=bls_n_periods,
+                bls_n_durations=bls_n_durations,
+                bls_top_n=bls_top_n,
+                bls_mode=bls_mode,
+            )
+            completed.add(target)
+            failed.discard(target)
+            errors.pop(target, None)
+            statuses.append(
+                BatchTargetStatus(
+                    run_utc=run_utc,
+                    target=target,
+                    status="success",
+                    error="",
+                    runtime_seconds=float(perf_counter() - target_started),
+                    output_path=str(output_path) if output_path is not None else "",
+                )
+            )
+        except Exception as exc:
+            failed.add(target)
+            errors[target] = str(exc)
+            statuses.append(
+                BatchTargetStatus(
+                    run_utc=run_utc,
+                    target=target,
+                    status="failed",
+                    error=str(exc),
+                    runtime_seconds=float(perf_counter() - target_started),
+                    output_path="",
+                )
+            )
+            LOGGER.exception("Batch target failed: %s (%s)", target, exc)
+        finally:
+            state_payload["completed_targets"] = sorted(completed)
+            state_payload["failed_targets"] = sorted(failed)
+            state_payload["errors"] = errors
+            _save_batch_state(state_path, state_payload)
+            _render_progress("Batch targets", idx, total)
+
+    status_csv, status_json = _write_batch_status_report(status_path, statuses)
+    LOGGER.info("Batch run complete: %d targets", total)
+    LOGGER.info("Batch state: %s", state_path)
+    LOGGER.info("Batch status CSV: %s", status_csv)
+    LOGGER.info("Batch status JSON: %s", status_json)
+    return state_path, status_csv, status_json
 
 
 def fetch_and_plot(

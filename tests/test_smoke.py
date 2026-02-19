@@ -14,7 +14,7 @@ from exohunt.cache import (
     _safe_target_name,
     _target_output_dir,
 )
-from exohunt.pipeline import fetch_and_plot
+from exohunt.pipeline import fetch_and_plot, run_batch_analysis
 from exohunt.plotting import _apply_time_window, _downsample_minmax, save_candidate_diagnostics
 from exohunt.preprocess import compute_preprocessing_quality_metrics
 from exohunt.parameters import estimate_candidate_parameters
@@ -398,6 +398,61 @@ def test_fetch_and_plot_manifest_comparison_key_stable_for_same_settings(monkeyp
         rows = list(csv.DictReader(handle))
     assert len(rows) == 2
     assert rows[0]["comparison_key"] == rows[1]["comparison_key"]
+
+
+def test_run_batch_analysis_resumable_and_failure_isolated(monkeypatch, tmp_path):
+    monkeypatch.chdir(tmp_path)
+
+    calls: list[str] = []
+
+    def _fake_fetch_and_plot(target, **kwargs):
+        calls.append(target)
+        if target == "TIC 2":
+            raise RuntimeError("simulated failure")
+        return None
+
+    monkeypatch.setattr(pipeline, "fetch_and_plot", _fake_fetch_and_plot)
+
+    state_path = tmp_path / "outputs/batch/state.json"
+    status_path = tmp_path / "outputs/batch/status.csv"
+    targets = ["TIC 1", "TIC 2", "TIC 3"]
+
+    run_batch_analysis(
+        targets=targets,
+        cache_dir=tmp_path / "cache",
+        resume=False,
+        state_path=state_path,
+        status_path=status_path,
+    )
+    assert calls == ["TIC 1", "TIC 2", "TIC 3"]
+    assert state_path.exists()
+    with state_path.open("r", encoding="utf-8") as handle:
+        state_payload = json.load(handle)
+    assert state_payload["completed_targets"] == ["TIC 1", "TIC 3"]
+    assert state_payload["failed_targets"] == ["TIC 2"]
+    assert "TIC 2" in state_payload["errors"]
+    with status_path.open("r", encoding="utf-8", newline="") as handle:
+        rows = list(csv.DictReader(handle))
+    assert len(rows) == 3
+    assert rows[0]["status"] == "success"
+    assert rows[1]["status"] == "failed"
+    assert rows[2]["status"] == "success"
+
+    calls.clear()
+    run_batch_analysis(
+        targets=targets,
+        cache_dir=tmp_path / "cache",
+        resume=True,
+        state_path=state_path,
+        status_path=status_path,
+    )
+    assert calls == ["TIC 2"]
+    with status_path.open("r", encoding="utf-8", newline="") as handle:
+        resumed_rows = list(csv.DictReader(handle))
+    assert len(resumed_rows) == 3
+    assert resumed_rows[0]["status"] == "skipped_completed"
+    assert resumed_rows[1]["status"] == "failed"
+    assert resumed_rows[2]["status"] == "skipped_completed"
 
 
 def test_fetch_and_plot_generates_plot_when_time_window_provided(monkeypatch, tmp_path):

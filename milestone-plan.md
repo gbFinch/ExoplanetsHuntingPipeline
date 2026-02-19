@@ -91,7 +91,8 @@ Important note: "When implementing the step explain the theory behind the milest
 - Exit criteria: each run has a manifest that can recreate analysis settings.
 - Implemented in `src/exohunt/pipeline.py` with coverage in `tests/test_smoke.py`.
 
-16. [Pending] [Engineering] Add batch processing workflow
+16. [Done] [Engineering] Add batch processing workflow
 - Run analysis for many TIC IDs from an input list.
 - Support resumable execution and per-target failure isolation.
 - Exit criteria: batch command completes with resumable state and per-target status report.
+- Implemented in `src/exohunt/pipeline.py` (`run_batch_analysis`) and CLI flags in `src/exohunt/cli.py`.
