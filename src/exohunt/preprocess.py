@@ -143,12 +143,17 @@ def prepare_lightcurve(
     outlier_sigma: float = 5.0,
     flatten_window_length: int = 401,
     apply_flatten: bool = True,
-) -> lk.LightCurve:
+    max_transit_duration_hours: float = 0.0,
+    transit_mask: np.ndarray | None = None,
+) -> tuple[lk.LightCurve, bool]:
     """Prepare light curve for transit search.
 
     Theory: transit signals are short, shallow dips, while most instrumental/systematic
     trends vary on longer timescales. This normalizes flux, removes extreme outliers,
     and flattens long-term trends so transit-like structure is easier to detect.
+
+    Returns (prepared_lc, normalized) where normalized indicates whether median
+    normalization was applied.
     """
     LOGGER.info("  - preprocessing: remove_nans")
     prepared = lc.remove_nans()
@@ -160,8 +165,11 @@ def prepare_lightcurve(
     # Normalize manually using robust median scaling to avoid Lightkurve normalize
     # instability/warnings on pathological flux distributions.
     median_flux = float(np.nanmedian(finite_flux))
+    # Fix: Change 9 — Track normalization state (P2)
+    was_normalized = True
     if not np.isfinite(median_flux) or abs(median_flux) < 1e-12:
         LOGGER.warning("  - preprocessing: skipping normalization (median flux is near zero).")
+        was_normalized = False
     else:
         LOGGER.info("  - preprocessing: median normalization")
         prepared = prepared / median_flux
@@ -170,17 +178,24 @@ def prepare_lightcurve(
     prepared = prepared.remove_outliers(sigma=outlier_sigma)
     if not apply_flatten:
         LOGGER.info("  - preprocessing: flatten skipped by config")
-        return prepared
+        return prepared, was_normalized
 
     LOGGER.info("  - preprocessing: flatten")
-    window_length = _resolve_window_length(len(prepared.time.value), flatten_window_length)
+    # Fix: Change 12 — Adaptive window mode (P1)
+    effective_window = flatten_window_length
+    if max_transit_duration_hours > 0:
+        min_window = int(3 * max_transit_duration_hours * 60 / 2)
+        if min_window % 2 == 0:
+            min_window += 1
+        effective_window = max(flatten_window_length, min_window)
+    window_length = _resolve_window_length(len(prepared.time.value), effective_window)
     if window_length is None:
         LOGGER.warning(
             "Skipping flatten: not enough points (%d) for window=%d.",
             len(prepared.time.value),
-            flatten_window_length,
+            effective_window,
         )
-        return prepared
+        return prepared, was_normalized
     est_low, est_high = _estimate_flatten_runtime_seconds(len(prepared.time.value), window_length)
     LOGGER.info(
         "  - preprocessing: flatten estimate %.1fs to %.1fs (n_points=%d, window=%d)",
@@ -189,4 +204,4 @@ def prepare_lightcurve(
         len(prepared.time.value),
         window_length,
     )
-    return prepared.flatten(window_length=window_length)
+    return prepared.flatten(window_length=window_length, mask=transit_mask), was_normalized

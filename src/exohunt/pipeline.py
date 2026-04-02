@@ -34,6 +34,7 @@ from exohunt.bls import (
     compute_bls_periodogram,
     refine_bls_candidates,
     run_bls_search,
+    run_iterative_bls_search,
 )
 from exohunt.ingest import _extract_segments, _parse_authors
 from exohunt.models import LightCurveSegment
@@ -86,6 +87,9 @@ _CANDIDATE_COLUMNS = [
     "power",
     "transit_time",
     "transit_count_estimate",
+    "snr",
+    "fap",
+    "iteration",
     "radius_ratio_rp_over_rs",
     "radius_earth_radii_solar_assumption",
     "duration_expected_hours_central_solar_density",
@@ -96,21 +100,19 @@ _CANDIDATE_COLUMNS = [
     "pass_min_transit_count",
     "pass_odd_even_depth",
     "pass_alias_harmonic",
+    "pass_secondary_eclipse",
+    "pass_depth_consistency",
     "vetting_pass",
     "transit_count_observed",
     "odd_depth_ppm",
     "even_depth_ppm",
     "odd_even_depth_mismatch_fraction",
+    "secondary_eclipse_depth_fraction",
+    "depth_consistency_fraction",
     "alias_harmonic_with_rank",
     "vetting_reasons",
+    "odd_even_status",
 ]
-
-_VETTING_MIN_TRANSIT_COUNT = 2
-_VETTING_ODD_EVEN_MAX_MISMATCH_FRACTION = 0.30
-_VETTING_ALIAS_TOLERANCE_FRACTION = 0.02
-_PARAMETER_STELLAR_DENSITY_KG_M3 = 1408.0
-_PARAMETER_DURATION_RATIO_MIN = 0.05
-_PARAMETER_DURATION_RATIO_MAX = 1.8
 
 _MANIFEST_INDEX_COLUMNS = [
     "run_started_utc",
@@ -361,7 +363,9 @@ def _load_cached_metrics(metrics_cache_path: Path) -> dict[str, float | int] | N
     return payload
 
 
-def _save_cached_metrics(metrics_cache_path: Path, metrics: dict[str, float | int]) -> None:
+def _save_cached_metrics(metrics_cache_path: Path, metrics: dict[str, float | int], *, no_cache: bool = False) -> None:
+    if no_cache:
+        return
     metrics_cache_path.parent.mkdir(parents=True, exist_ok=True)
     metrics_cache_path.write_text(json.dumps(metrics, sort_keys=True, indent=2), encoding="utf-8")
 
@@ -530,11 +534,15 @@ def _write_bls_candidates(
                         "pass_min_transit_count": None,
                         "pass_odd_even_depth": None,
                         "pass_alias_harmonic": None,
+                        "pass_secondary_eclipse": None,
+                        "pass_depth_consistency": None,
                         "vetting_pass": None,
                         "transit_count_observed": None,
                         "odd_depth_ppm": None,
                         "even_depth_ppm": None,
                         "odd_even_depth_mismatch_fraction": None,
+                        "secondary_eclipse_depth_fraction": None,
+                        "depth_consistency_fraction": None,
                         "alias_harmonic_with_rank": None,
                         "vetting_reasons": "",
                     }
@@ -640,11 +648,13 @@ def run_batch_analysis(
     bls_n_durations: int = 12,
     bls_top_n: int = 5,
     bls_mode: str = "stitched",
+    bls_min_snr: float = 7.0,
     config_schema_version: int = 1,
     config_preset_id: str | None = None,
     config_preset_version: int | None = None,
     config_preset_hash: str | None = None,
     resume: bool = False,
+    no_cache: bool = False,
     state_path: Path | None = None,
     status_path: Path | None = None,
 ) -> tuple[Path, Path, Path]:
@@ -715,10 +725,12 @@ def run_batch_analysis(
                 bls_n_durations=bls_n_durations,
                 bls_top_n=bls_top_n,
                 bls_mode=bls_mode,
+                bls_min_snr=bls_min_snr,
                 config_schema_version=config_schema_version,
                 config_preset_id=config_preset_id,
                 config_preset_version=config_preset_version,
                 config_preset_hash=config_preset_hash,
+                no_cache=no_cache,
             )
             completed.add(target)
             failed.discard(target)
@@ -762,50 +774,61 @@ def run_batch_analysis(
     return state_path, status_csv, status_json
 
 
-def fetch_and_plot(
-    target: str,
-    cache_dir: Path | None = None,
-    refresh_cache: bool = False,
-    outlier_sigma: float = 5.0,
-    flatten_window_length: int = 401,
-    max_download_files: int | None = None,
-    preprocess_enabled: bool = True,
-    no_flatten: bool = False,
-    preprocess_mode: str = "per-sector",
-    authors: str | None = None,
-    interactive_html: bool = False,
-    interactive_max_points: int = 200_000,
-    plot_enabled: bool = True,
-    plot_mode: str = "stitched",
-    run_bls: bool = True,
-    bls_period_min_days: float = 0.5,
-    bls_period_max_days: float = 20.0,
-    bls_duration_min_hours: float = 0.5,
-    bls_duration_max_hours: float = 10.0,
-    bls_n_periods: int = 2000,
-    bls_n_durations: int = 12,
-    bls_top_n: int = 5,
-    bls_mode: str = "stitched",
-    config_schema_version: int = 1,
-    config_preset_id: str | None = None,
-    config_preset_version: int | None = None,
-    config_preset_hash: str | None = None,
-) -> Path | None:
-    """Fetch, preprocess, analyze, and optionally plot a target light curve.
+# ---------------------------------------------------------------------------
+# Stage I/O dataclasses
+# ---------------------------------------------------------------------------
 
-    Theory (milestone 17): ingest intentionally includes all available sectors.
-    This defaults toward completeness, which improves transit recoverability for
-    sparse or long-period events. The tradeoff is reduced user control over
-    sector selection in the default workflow, but avoids accidental under-sampling.
-    """
-    started_at = perf_counter()
-    cache_dir = cache_dir or _DEFAULT_CACHE_DIR
-    run_started_dt = datetime.now(tz=timezone.utc)
-    run_started_utc = run_started_dt.isoformat()
-    preprocess_mode = _resolve_preprocess_mode(preprocess_mode)
-    plot_mode = _resolve_two_track_mode(plot_mode, label="plot mode")
-    bls_mode = _resolve_two_track_mode(bls_mode, label="BLS mode")
-    selected_authors = _parse_authors(authors)
+@dataclass(frozen=True)
+class IngestResult:
+    """Output of the ingest stage."""
+    lc: lk.LightCurve
+    lc_prepared: lk.LightCurve
+    boundaries: list[float]
+    data_source: str
+    raw_cache_path: Path
+    prepared_cache_path: Path
+    prepared_segments_for_bls: list[LightCurveSegment]
+    raw_segments_for_plot: list[LightCurveSegment]
+    prepared_segments_for_plot: list[LightCurveSegment]
+
+
+@dataclass(frozen=True)
+class SearchResult:
+    """Output of the search + output stage."""
+    bls_candidates: list[BLSCandidate]
+    candidate_output_key: str | None
+    candidate_csv_paths: list[Path]
+    candidate_json_paths: list[Path]
+    diagnostic_assets: list[tuple[Path, Path]]
+    stitched_vetting_by_rank: dict[int, CandidateVettingResult]
+
+
+@dataclass(frozen=True)
+class PlotResult:
+    """Output of the plotting stage."""
+    output_paths: list[Path]
+    interactive_paths: list[Path]
+
+
+
+def _ingest_stage(
+    *,
+    target: str,
+    cache_dir: Path,
+    refresh_cache: bool,
+    outlier_sigma: float,
+    flatten_window_length: int,
+    max_download_files: int | None,
+    preprocess_enabled: bool,
+    no_flatten: bool,
+    preprocess_mode: str,
+    selected_authors: set[str] | None,
+    authors: str | None,
+    run_bls: bool,
+    bls_duration_max_hours: float,
+    no_cache: bool = False,
+) -> IngestResult:
+    """Ingest light curve data: cache check, download, preprocess."""
     boundaries: list[float] = []
     data_source = "download"
     prepared_segments_for_bls: list[LightCurveSegment] = []
@@ -884,7 +907,7 @@ def fetch_and_plot(
             LOGGER.info("Download+stitch complete in %.2fs", perf_counter() - step_started)
 
             LOGGER.info("Writing raw cache: %s", raw_cache_path)
-            _save_npz_lightcurve(raw_cache_path, lc)
+            _save_npz_lightcurve(raw_cache_path, lc, no_cache=no_cache)
 
         if preprocess_enabled:
             if lc_prepared is None:
@@ -895,10 +918,14 @@ def fetch_and_plot(
                     outlier_sigma=outlier_sigma,
                     flatten_window_length=flatten_window_length,
                     apply_flatten=not no_flatten,
+                    max_transit_duration_hours=bls_duration_max_hours if run_bls else 0.0,
                 )
+                # Fix: Change 9/10 — Unpack normalization flag (P2)
+                if isinstance(lc_prepared, tuple):
+                    lc_prepared, _normalized = lc_prepared
                 LOGGER.info("Preprocessing complete in %.2fs", perf_counter() - step_started)
                 LOGGER.info("Writing prepared cache: %s", prepared_cache_path)
-                _save_npz_lightcurve(prepared_cache_path, lc_prepared)
+                _save_npz_lightcurve(prepared_cache_path, lc_prepared, no_cache=no_cache)
             elif lc is None:
                 lc = lc_prepared
         else:
@@ -986,10 +1013,10 @@ def fetch_and_plot(
                 perf_counter() - step_started,
                 len(raw_segments),
             )
-            _write_segment_manifest(target, cache_dir, raw_segments)
+            _write_segment_manifest(target, cache_dir, raw_segments, no_cache=no_cache)
             for segment in raw_segments:
                 raw_path = _segment_raw_cache_path(target, cache_dir, segment.segment_id)
-                _save_npz_lightcurve(raw_path, segment.lc)
+                _save_npz_lightcurve(raw_path, segment.lc, no_cache=no_cache)
             data_source = "download"
         else:
             data_source = "segment-cache"
@@ -1014,7 +1041,11 @@ def fetch_and_plot(
                     outlier_sigma=outlier_sigma,
                     flatten_window_length=flatten_window_length,
                     apply_flatten=not no_flatten,
+                    max_transit_duration_hours=bls_duration_max_hours if run_bls else 0.0,
                 )
+                # Fix: Change 9/10 — Unpack normalization flag (P2)
+                if isinstance(prepared_lc, tuple):
+                    prepared_lc, _seg_normalized = prepared_lc
                 prep_segment = LightCurveSegment(
                     segment_id=segment.segment_id,
                     sector=segment.sector,
@@ -1031,7 +1062,7 @@ def fetch_and_plot(
                     flatten_window_length=flatten_window_length,
                     no_flatten=no_flatten,
                 )
-                _save_npz_lightcurve(prep_path, prepared_lc)
+                _save_npz_lightcurve(prep_path, prepared_lc, no_cache=no_cache)
                 _render_progress("Prepared segments", idx, total_segments)
             prepared_segments = rebuilt_prepared
         else:
@@ -1046,47 +1077,65 @@ def fetch_and_plot(
         raw_cache_path = _segment_base_dir(target, cache_dir)
         prepared_cache_path = _segment_base_dir(target, cache_dir)
 
-    n_points_raw = len(lc.time.value)
-    n_points_prepared = len(lc_prepared.time.value)
-    raw_time_min = float(np.nanmin(lc.time.value))
-    raw_time_max = float(np.nanmax(lc.time.value))
-    time_min = float(lc_prepared.time.value.min())
-    time_max = float(lc_prepared.time.value.max())
-    metrics_cache_path = _metrics_cache_path(
-        target=target,
-        cache_dir=cache_dir,
-        preprocess_mode=preprocess_mode,
-        preprocess_enabled=preprocess_enabled,
-        outlier_sigma=outlier_sigma,
-        flatten_window_length=flatten_window_length,
-        no_flatten=no_flatten,
-        authors=authors,
-        raw_n_points=n_points_raw,
-        prepared_n_points=n_points_prepared,
-        raw_time_min=raw_time_min,
-        raw_time_max=raw_time_max,
-        prepared_time_min=time_min,
-        prepared_time_max=time_max,
-    )
-    metrics_payload = _load_cached_metrics(metrics_cache_path)
-    metrics_cache_hit = metrics_payload is not None
-    if metrics_payload is None:
-        preprocessing_metrics = compute_preprocessing_quality_metrics(lc, lc_prepared)
-        metrics_payload = asdict(preprocessing_metrics)
-        _save_cached_metrics(metrics_cache_path, metrics_payload)
-    else:
-        LOGGER.info("Preprocessing metrics cache hit: %s", metrics_cache_path)
-    metrics_csv_path, metrics_json_path = _write_preprocessing_metrics(
-        target=target,
-        preprocess_mode=preprocess_mode,
-        preprocess_enabled=preprocess_enabled,
-        outlier_sigma=outlier_sigma,
-        flatten_window_length=flatten_window_length,
-        no_flatten=no_flatten,
-        data_source=data_source,
-        metrics=metrics_payload,
+
+    return IngestResult(
+        lc=lc, lc_prepared=lc_prepared, boundaries=boundaries,
+        data_source=data_source, raw_cache_path=raw_cache_path,
+        prepared_cache_path=prepared_cache_path,
+        prepared_segments_for_bls=prepared_segments_for_bls,
+        raw_segments_for_plot=raw_segments_for_plot,
+        prepared_segments_for_plot=prepared_segments_for_plot,
     )
 
+
+def _search_and_output_stage(
+    *,
+    target: str,
+    lc_prepared: lk.LightCurve,
+    prepared_segments_for_bls: list[LightCurveSegment],
+    preprocess_mode: str,
+    preprocess_enabled: bool,
+    data_source: str,
+    outlier_sigma: float,
+    flatten_window_length: int,
+    no_flatten: bool,
+    authors: str | None,
+    n_points_raw: int,
+    n_points_prepared: int,
+    time_min: float,
+    time_max: float,
+    run_bls: bool,
+    bls_period_min_days: float,
+    bls_period_max_days: float,
+    bls_duration_min_hours: float,
+    bls_duration_max_hours: float,
+    bls_n_periods: int,
+    bls_n_durations: int,
+    bls_top_n: int,
+    bls_mode: str,
+    bls_min_snr: float,
+    vetting_min_transit_count: int,
+    vetting_odd_even_max_mismatch_fraction: float,
+    vetting_alias_tolerance_fraction: float,
+    vetting_secondary_eclipse_max_fraction: float,
+    vetting_depth_consistency_max_fraction: float,
+    parameter_stellar_density_kg_m3: float,
+    parameter_duration_ratio_min: float,
+    parameter_duration_ratio_max: float,
+    parameter_apply_limb_darkening_correction: bool = False,
+    parameter_limb_darkening_u1: float = 0.4,
+    parameter_limb_darkening_u2: float = 0.2,
+    parameter_tic_density_lookup: bool = False,
+    bls_unique_period_separation_fraction: float = 0.05,
+    bls_iterative_masking: bool = False,
+    bls_iterative_passes: int = 1,
+    bls_iterative_top_n: int = 1,
+    bls_transit_mask_padding_factor: float = 1.5,
+    bls_subtraction_model: str = "box_mask",
+    preprocess_iterative_flatten: bool = False,
+    preprocess_transit_mask_padding_factor: float = 1.5,
+) -> SearchResult:
+    """Run BLS search, vetting, parameter estimation, and write candidates."""
     bls_candidates = []
     candidate_output_key: str | None = None
     candidate_csv_paths: list[Path] = []
@@ -1109,7 +1158,22 @@ def fetch_and_plot(
                     n_periods=bls_n_periods,
                     n_durations=bls_n_durations,
                     top_n=bls_top_n,
+                    min_snr=bls_min_snr,
+                    unique_period_separation_fraction=bls_unique_period_separation_fraction,
                 )
+                # Fix: Change 11 — Refine per-sector candidates (O2)
+                if segment_candidates:
+                    segment_candidates = refine_bls_candidates(
+                        lc_prepared=segment.lc,
+                        candidates=segment_candidates,
+                        period_min_days=bls_period_min_days,
+                        period_max_days=bls_period_max_days,
+                        duration_min_hours=bls_duration_min_hours,
+                        duration_max_hours=bls_duration_max_hours,
+                        n_periods=max(12000, bls_n_periods * 6),
+                        n_durations=max(20, bls_n_durations),
+                        window_fraction=0.02,
+                    )
                 total_candidates += len(segment_candidates)
                 segment_time = np.asarray(segment.lc.time.value, dtype=float)
                 finite_segment_time = segment_time[np.isfinite(segment_time)]
@@ -1147,9 +1211,9 @@ def fetch_and_plot(
                     "bls_n_durations": int(bls_n_durations),
                     "bls_top_n": int(bls_top_n),
                     "parameter_estimation_enabled": True,
-                    "parameter_stellar_density_kg_m3": float(_PARAMETER_STELLAR_DENSITY_KG_M3),
-                    "parameter_duration_ratio_min": float(_PARAMETER_DURATION_RATIO_MIN),
-                    "parameter_duration_ratio_max": float(_PARAMETER_DURATION_RATIO_MAX),
+                    "parameter_stellar_density_kg_m3": float(parameter_stellar_density_kg_m3),
+                    "parameter_duration_ratio_min": float(parameter_duration_ratio_min),
+                    "parameter_duration_ratio_max": float(parameter_duration_ratio_max),
                 }
                 segment_key = _candidate_output_key(
                     target=target,
@@ -1179,15 +1243,22 @@ def fetch_and_plot(
                     vetting_by_rank=vet_bls_candidates(
                         lc_prepared=segment.lc,
                         candidates=segment_candidates,
-                        min_transit_count=_VETTING_MIN_TRANSIT_COUNT,
-                        odd_even_mismatch_max_fraction=_VETTING_ODD_EVEN_MAX_MISMATCH_FRACTION,
-                        alias_tolerance_fraction=_VETTING_ALIAS_TOLERANCE_FRACTION,
+                        min_transit_count=vetting_min_transit_count,
+                        odd_even_mismatch_max_fraction=vetting_odd_even_max_mismatch_fraction,
+                        alias_tolerance_fraction=vetting_alias_tolerance_fraction,
+                        secondary_eclipse_max_fraction=vetting_secondary_eclipse_max_fraction,
+                        depth_consistency_max_fraction=vetting_depth_consistency_max_fraction,
                     ),
                     parameter_estimates_by_rank=estimate_candidate_parameters(
                         candidates=segment_candidates,
-                        stellar_density_kg_m3=_PARAMETER_STELLAR_DENSITY_KG_M3,
-                        duration_ratio_min=_PARAMETER_DURATION_RATIO_MIN,
-                        duration_ratio_max=_PARAMETER_DURATION_RATIO_MAX,
+                        stellar_density_kg_m3=parameter_stellar_density_kg_m3,
+                        duration_ratio_min=parameter_duration_ratio_min,
+                        duration_ratio_max=parameter_duration_ratio_max,
+                        apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
+                        limb_darkening_u1=parameter_limb_darkening_u1,
+                        limb_darkening_u2=parameter_limb_darkening_u2,
+                        tic_density_lookup=parameter_tic_density_lookup,
+                        tic_id=target.replace("TIC ", "").strip() if parameter_tic_density_lookup else None,
                     ),
                 )
                 candidate_csv_paths.append(csv_path)
@@ -1225,16 +1296,52 @@ def fetch_and_plot(
                 LOGGER.warning(
                     "BLS mode 'per-sector' requested but no prepared segments are available; falling back to stitched."
                 )
-            bls_candidates = run_bls_search(
-                lc_prepared=lc_prepared,
-                period_min_days=bls_period_min_days,
-                period_max_days=bls_period_max_days,
-                duration_min_hours=bls_duration_min_hours,
-                duration_max_hours=bls_duration_max_hours,
-                n_periods=bls_n_periods,
-                n_durations=bls_n_durations,
-                top_n=bls_top_n,
-            )
+            if bls_iterative_masking and bls_iterative_passes > 1:
+                from exohunt.config import BLSConfig, PreprocessConfig
+
+                iter_bls_cfg = BLSConfig(
+                    enabled=True, mode=bls_mode,
+                    period_min_days=bls_period_min_days,
+                    period_max_days=bls_period_max_days,
+                    duration_min_hours=bls_duration_min_hours,
+                    duration_max_hours=bls_duration_max_hours,
+                    n_periods=bls_n_periods, n_durations=bls_n_durations,
+                    top_n=bls_top_n, min_snr=bls_min_snr,
+                    compute_fap=False, fap_iterations=0,
+                    iterative_masking=True,
+                    unique_period_separation_fraction=bls_unique_period_separation_fraction,
+                    iterative_passes=bls_iterative_passes,
+                    subtraction_model=bls_subtraction_model,
+                    iterative_top_n=bls_iterative_top_n,
+                    transit_mask_padding_factor=bls_transit_mask_padding_factor,
+                )
+                iter_pp_cfg = PreprocessConfig(
+                    enabled=True, mode="per-sector",
+                    outlier_sigma=outlier_sigma,
+                    flatten_window_length=flatten_window_length,
+                    flatten=not no_flatten,
+                    iterative_flatten=preprocess_iterative_flatten,
+                    transit_mask_padding_factor=preprocess_transit_mask_padding_factor,
+                )
+                bls_candidates = run_iterative_bls_search(
+                    lc_prepared=lc_prepared,
+                    config=iter_bls_cfg,
+                    preprocess_config=iter_pp_cfg,
+                    lc=lc_prepared if preprocess_iterative_flatten else None,
+                )
+            else:
+                bls_candidates = run_bls_search(
+                    lc_prepared=lc_prepared,
+                    period_min_days=bls_period_min_days,
+                    period_max_days=bls_period_max_days,
+                    duration_min_hours=bls_duration_min_hours,
+                    duration_max_hours=bls_duration_max_hours,
+                    n_periods=bls_n_periods,
+                    n_durations=bls_n_durations,
+                    top_n=bls_top_n,
+                    min_snr=bls_min_snr,
+                    unique_period_separation_fraction=bls_unique_period_separation_fraction,
+                )
             if bls_candidates:
                 refined_candidates = refine_bls_candidates(
                     lc_prepared=lc_prepared,
@@ -1252,9 +1359,11 @@ def fetch_and_plot(
                 stitched_vetting_by_rank = vet_bls_candidates(
                     lc_prepared=lc_prepared,
                     candidates=bls_candidates,
-                    min_transit_count=_VETTING_MIN_TRANSIT_COUNT,
-                    odd_even_mismatch_max_fraction=_VETTING_ODD_EVEN_MAX_MISMATCH_FRACTION,
-                    alias_tolerance_fraction=_VETTING_ALIAS_TOLERANCE_FRACTION,
+                    min_transit_count=vetting_min_transit_count,
+                    odd_even_mismatch_max_fraction=vetting_odd_even_max_mismatch_fraction,
+                    alias_tolerance_fraction=vetting_alias_tolerance_fraction,
+                    secondary_eclipse_max_fraction=vetting_secondary_eclipse_max_fraction,
+                    depth_consistency_max_fraction=vetting_depth_consistency_max_fraction,
                 )
             LOGGER.info(
                 "BLS complete in %.2fs (%d candidate%s)",
@@ -1310,9 +1419,9 @@ def fetch_and_plot(
             "bls_top_n": int(bls_top_n),
             "bls_refined_local": bool(run_bls and bls_mode == "stitched"),
             "parameter_estimation_enabled": bool(run_bls),
-            "parameter_stellar_density_kg_m3": float(_PARAMETER_STELLAR_DENSITY_KG_M3),
-            "parameter_duration_ratio_min": float(_PARAMETER_DURATION_RATIO_MIN),
-            "parameter_duration_ratio_max": float(_PARAMETER_DURATION_RATIO_MAX),
+            "parameter_stellar_density_kg_m3": float(parameter_stellar_density_kg_m3),
+            "parameter_duration_ratio_min": float(parameter_duration_ratio_min),
+            "parameter_duration_ratio_max": float(parameter_duration_ratio_max),
         }
         candidate_csv_path, candidate_json_path = _write_bls_candidates(
             target=target,
@@ -1322,13 +1431,49 @@ def fetch_and_plot(
             vetting_by_rank=stitched_vetting_by_rank,
             parameter_estimates_by_rank=estimate_candidate_parameters(
                 candidates=bls_candidates,
-                stellar_density_kg_m3=_PARAMETER_STELLAR_DENSITY_KG_M3,
-                duration_ratio_min=_PARAMETER_DURATION_RATIO_MIN,
-                duration_ratio_max=_PARAMETER_DURATION_RATIO_MAX,
+                stellar_density_kg_m3=parameter_stellar_density_kg_m3,
+                duration_ratio_min=parameter_duration_ratio_min,
+                duration_ratio_max=parameter_duration_ratio_max,
+                apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
+                limb_darkening_u1=parameter_limb_darkening_u1,
+                limb_darkening_u2=parameter_limb_darkening_u2,
+                tic_density_lookup=parameter_tic_density_lookup,
+                tic_id=target.replace("TIC ", "").strip() if parameter_tic_density_lookup else None,
             ),
         )
         candidate_csv_paths.append(candidate_csv_path)
         candidate_json_paths.append(candidate_json_path)
+
+        # Write per-iteration artifact files when iterative BLS was used (FR-12)
+        if bls_iterative_masking and bls_iterative_passes > 1 and bls_candidates:
+            iterations_seen = sorted({c.iteration for c in bls_candidates})
+            for iter_n in iterations_seen:
+                iter_cands = [c for c in bls_candidates if c.iteration == iter_n]
+                iter_metadata = dict(candidate_metadata)
+                iter_metadata["bls_iteration"] = iter_n
+                _, iter_json = _write_bls_candidates(
+                    target=target,
+                    output_key=f"iter_{iter_n}_{candidate_output_key}",
+                    metadata=iter_metadata,
+                    candidates=iter_cands,
+                    vetting_by_rank=stitched_vetting_by_rank,
+                    parameter_estimates_by_rank=estimate_candidate_parameters(
+                        candidates=iter_cands,
+                        stellar_density_kg_m3=parameter_stellar_density_kg_m3,
+                        duration_ratio_min=parameter_duration_ratio_min,
+                        duration_ratio_max=parameter_duration_ratio_max,
+                        apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
+                        limb_darkening_u1=parameter_limb_darkening_u1,
+                        limb_darkening_u2=parameter_limb_darkening_u2,
+                        tic_density_lookup=parameter_tic_density_lookup,
+                        tic_id=target.replace("TIC ", "").strip() if parameter_tic_density_lookup else None,
+                    ),
+                )
+                candidate_json_paths.append(iter_json)
+            LOGGER.info(
+                "Wrote %d per-iteration candidate artifact(s)",
+                len(iterations_seen),
+            )
 
         if run_bls and bls_candidates:
             LOGGER.info("Step 6/7: generating candidate diagnostics")
@@ -1365,6 +1510,33 @@ def fetch_and_plot(
 
     # Theory (milestone 18): mode-based plotting removes several loosely coupled
     # axis/sector flags and makes output intent explicit and reproducible.
+
+    return SearchResult(
+        bls_candidates=bls_candidates,
+        candidate_output_key=candidate_output_key,
+        candidate_csv_paths=candidate_csv_paths,
+        candidate_json_paths=candidate_json_paths,
+        diagnostic_assets=diagnostic_assets,
+        stitched_vetting_by_rank=stitched_vetting_by_rank,
+    )
+
+
+def _plotting_stage(
+    *,
+    target: str,
+    lc: lk.LightCurve,
+    lc_prepared: lk.LightCurve,
+    boundaries: list[float],
+    plot_enabled: bool,
+    plot_mode: str,
+    preprocess_mode: str,
+    interactive_html: bool,
+    interactive_max_points: int,
+    raw_segments_for_plot: list[LightCurveSegment],
+    prepared_segments_for_plot: list[LightCurveSegment],
+    smoothing_window: int = 5,
+) -> PlotResult:
+    """Generate static and interactive plots."""
     output_paths: list[Path] = []
     interactive_paths: list[Path] = []
     if plot_enabled:
@@ -1378,6 +1550,7 @@ def fetch_and_plot(
                     lc_prepared=lc_prepared,
                     boundaries=boundaries,
                     output_key="stitched",
+                    smoothing_window=smoothing_window,
                 )
             )
             if interactive_html:
@@ -1415,6 +1588,7 @@ def fetch_and_plot(
                         lc_prepared=prepared_segment.lc,
                         boundaries=[],
                         output_key=raw_segment.segment_id,
+                        smoothing_window=smoothing_window,
                     )
                 )
                 if interactive_html:
@@ -1438,6 +1612,64 @@ def fetch_and_plot(
         )
     else:
         LOGGER.info("Step 7/7: skipping plot generation (plot.enabled=false)")
+
+
+    return PlotResult(output_paths=output_paths, interactive_paths=interactive_paths)
+
+
+def _manifest_stage(
+    *,
+    target: str,
+    started_at: float,
+    run_started_utc: str,
+    refresh_cache: bool,
+    outlier_sigma: float,
+    flatten_window_length: int,
+    preprocess_enabled: bool,
+    no_flatten: bool,
+    preprocess_mode: str,
+    authors: str | None,
+    interactive_html: bool,
+    interactive_max_points: int,
+    plot_enabled: bool,
+    plot_mode: str,
+    run_bls: bool,
+    bls_mode: str,
+    bls_period_min_days: float,
+    bls_period_max_days: float,
+    bls_duration_min_hours: float,
+    bls_duration_max_hours: float,
+    bls_n_periods: int,
+    bls_n_durations: int,
+    bls_top_n: int,
+    config_schema_version: int,
+    config_preset_id: str | None,
+    config_preset_version: int | None,
+    config_preset_hash: str | None,
+    data_source: str,
+    n_points_raw: int,
+    n_points_prepared: int,
+    time_min: float,
+    time_max: float,
+    raw_cache_path: Path,
+    prepared_cache_path: Path,
+    metrics_csv_path: Path,
+    metrics_json_path: Path,
+    metrics_cache_path: Path,
+    metrics_cache_hit: bool,
+    metrics_payload: dict,
+    search_result: SearchResult,
+    plot_result: PlotResult,
+) -> None:
+    """Write run manifest and log summary."""
+    bls_candidates = search_result.bls_candidates
+    candidate_output_key = search_result.candidate_output_key
+    candidate_csv_paths = search_result.candidate_csv_paths
+    candidate_json_paths = search_result.candidate_json_paths
+    diagnostic_assets = search_result.diagnostic_assets
+    stitched_vetting_by_rank = search_result.stitched_vetting_by_rank
+    output_paths = plot_result.output_paths
+    interactive_paths = plot_result.interactive_paths
 
     run_finished_utc = datetime.now(tz=timezone.utc).isoformat()
     runtime_seconds = perf_counter() - started_at
@@ -1609,3 +1841,210 @@ def fetch_and_plot(
     LOGGER.info("--------------------------------")
 
     return output_paths[0] if output_paths else None
+
+
+def fetch_and_plot(
+    target: str,
+    cache_dir: Path | None = None,
+    refresh_cache: bool = False,
+    outlier_sigma: float = 5.0,
+    flatten_window_length: int = 401,
+    max_download_files: int | None = None,
+    preprocess_enabled: bool = True,
+    no_flatten: bool = False,
+    preprocess_mode: str = "per-sector",
+    authors: str | None = None,
+    interactive_html: bool = False,
+    interactive_max_points: int = 200_000,
+    plot_enabled: bool = True,
+    plot_mode: str = "stitched",
+    run_bls: bool = True,
+    bls_period_min_days: float = 0.5,
+    bls_period_max_days: float = 20.0,
+    bls_duration_min_hours: float = 0.5,
+    bls_duration_max_hours: float = 10.0,
+    bls_n_periods: int = 2000,
+    bls_n_durations: int = 12,
+    bls_top_n: int = 5,
+    bls_mode: str = "stitched",
+    bls_min_snr: float = 7.0,
+    bls_compute_fap: bool = False,
+    bls_fap_iterations: int = 1000,
+    bls_iterative_masking: bool = False,
+    bls_iterative_passes: int = 1,
+    bls_iterative_top_n: int = 1,
+    bls_transit_mask_padding_factor: float = 1.5,
+    bls_subtraction_model: str = "box_mask",
+    preprocess_iterative_flatten: bool = False,
+    preprocess_transit_mask_padding_factor: float = 1.5,
+    vetting_min_transit_count: int = 2,
+    vetting_odd_even_max_mismatch_fraction: float = 0.30,
+    vetting_alias_tolerance_fraction: float = 0.02,
+    vetting_secondary_eclipse_max_fraction: float = 0.30,
+    vetting_depth_consistency_max_fraction: float = 0.50,
+    parameter_stellar_density_kg_m3: float = 1408.0,
+    parameter_duration_ratio_min: float = 0.05,
+    parameter_duration_ratio_max: float = 1.8,
+    parameter_apply_limb_darkening_correction: bool = False,
+    parameter_limb_darkening_u1: float = 0.4,
+    parameter_limb_darkening_u2: float = 0.2,
+    parameter_tic_density_lookup: bool = False,
+    bls_unique_period_separation_fraction: float = 0.05,
+    plot_smoothing_window: int = 5,
+    config_schema_version: int = 1,
+    config_preset_id: str | None = None,
+    config_preset_version: int | None = None,
+    config_preset_hash: str | None = None,
+    no_cache: bool = False,
+) -> Path | None:
+    """Fetch, preprocess, analyze, and optionally plot a target light curve.
+
+    Theory (milestone 17): ingest intentionally includes all available sectors.
+    This defaults toward completeness, which improves transit recoverability for
+    sparse or long-period events. The tradeoff is reduced user control over
+    sector selection in the default workflow, but avoids accidental under-sampling.
+    """
+    started_at = perf_counter()
+    cache_dir = cache_dir or _DEFAULT_CACHE_DIR
+    run_started_dt = datetime.now(tz=timezone.utc)
+    run_started_utc = run_started_dt.isoformat()
+    preprocess_mode = _resolve_preprocess_mode(preprocess_mode)
+    plot_mode = _resolve_two_track_mode(plot_mode, label="plot mode")
+    bls_mode = _resolve_two_track_mode(bls_mode, label="BLS mode")
+    selected_authors = _parse_authors(authors)
+
+    # Stage 1: Ingest
+    ingest = _ingest_stage(
+        target=target, cache_dir=cache_dir, refresh_cache=refresh_cache,
+        outlier_sigma=outlier_sigma, flatten_window_length=flatten_window_length,
+        max_download_files=max_download_files, preprocess_enabled=preprocess_enabled,
+        no_flatten=no_flatten, preprocess_mode=preprocess_mode,
+        selected_authors=selected_authors, authors=authors,
+        run_bls=run_bls, bls_duration_max_hours=bls_duration_max_hours,
+        no_cache=no_cache,
+    )
+    lc = ingest.lc
+    lc_prepared = ingest.lc_prepared
+
+    # Stage 2: Metrics
+    n_points_raw = len(lc.time.value)
+    n_points_prepared = len(lc_prepared.time.value)
+    raw_time_min = float(np.nanmin(lc.time.value))
+    raw_time_max = float(np.nanmax(lc.time.value))
+    time_min = float(lc_prepared.time.value.min())
+    time_max = float(lc_prepared.time.value.max())
+    metrics_cache_path = _metrics_cache_path(
+        target=target,
+        cache_dir=cache_dir,
+        preprocess_mode=preprocess_mode,
+        preprocess_enabled=preprocess_enabled,
+        outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length,
+        no_flatten=no_flatten,
+        authors=authors,
+        raw_n_points=n_points_raw,
+        prepared_n_points=n_points_prepared,
+        raw_time_min=raw_time_min,
+        raw_time_max=raw_time_max,
+        prepared_time_min=time_min,
+        prepared_time_max=time_max,
+    )
+    metrics_payload = _load_cached_metrics(metrics_cache_path)
+    metrics_cache_hit = metrics_payload is not None
+    if metrics_payload is None:
+        preprocessing_metrics = compute_preprocessing_quality_metrics(lc, lc_prepared)
+        metrics_payload = asdict(preprocessing_metrics)
+        _save_cached_metrics(metrics_cache_path, metrics_payload, no_cache=no_cache)
+    else:
+        LOGGER.info("Preprocessing metrics cache hit: %s", metrics_cache_path)
+    metrics_csv_path, metrics_json_path = _write_preprocessing_metrics(
+        target=target,
+        preprocess_mode=preprocess_mode,
+        preprocess_enabled=preprocess_enabled,
+        outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length,
+        no_flatten=no_flatten,
+        data_source=ingest.data_source,
+        metrics=metrics_payload,
+    )
+
+    # Stage 3: Search + Output
+    search = _search_and_output_stage(
+        target=target, lc_prepared=lc_prepared,
+        prepared_segments_for_bls=ingest.prepared_segments_for_bls,
+        preprocess_mode=preprocess_mode, preprocess_enabled=preprocess_enabled,
+        data_source=ingest.data_source, outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length, no_flatten=no_flatten,
+        authors=authors, n_points_raw=n_points_raw,
+        n_points_prepared=n_points_prepared, time_min=time_min, time_max=time_max,
+        run_bls=run_bls, bls_period_min_days=bls_period_min_days,
+        bls_period_max_days=bls_period_max_days,
+        bls_duration_min_hours=bls_duration_min_hours,
+        bls_duration_max_hours=bls_duration_max_hours,
+        bls_n_periods=bls_n_periods, bls_n_durations=bls_n_durations,
+        bls_top_n=bls_top_n, bls_mode=bls_mode, bls_min_snr=bls_min_snr,
+        vetting_min_transit_count=vetting_min_transit_count,
+        vetting_odd_even_max_mismatch_fraction=vetting_odd_even_max_mismatch_fraction,
+        vetting_alias_tolerance_fraction=vetting_alias_tolerance_fraction,
+        vetting_secondary_eclipse_max_fraction=vetting_secondary_eclipse_max_fraction,
+        vetting_depth_consistency_max_fraction=vetting_depth_consistency_max_fraction,
+        parameter_stellar_density_kg_m3=parameter_stellar_density_kg_m3,
+        parameter_duration_ratio_min=parameter_duration_ratio_min,
+        parameter_duration_ratio_max=parameter_duration_ratio_max,
+        parameter_apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
+        parameter_limb_darkening_u1=parameter_limb_darkening_u1,
+        parameter_limb_darkening_u2=parameter_limb_darkening_u2,
+        parameter_tic_density_lookup=parameter_tic_density_lookup,
+        bls_unique_period_separation_fraction=bls_unique_period_separation_fraction,
+        bls_iterative_masking=bls_iterative_masking,
+        bls_iterative_passes=bls_iterative_passes,
+        bls_iterative_top_n=bls_iterative_top_n,
+        bls_transit_mask_padding_factor=bls_transit_mask_padding_factor,
+        bls_subtraction_model=bls_subtraction_model,
+        preprocess_iterative_flatten=preprocess_iterative_flatten,
+        preprocess_transit_mask_padding_factor=preprocess_transit_mask_padding_factor,
+    )
+
+    # Stage 4: Plotting
+    plots = _plotting_stage(
+        target=target, lc=lc, lc_prepared=lc_prepared,
+        boundaries=ingest.boundaries, plot_enabled=plot_enabled,
+        plot_mode=plot_mode, preprocess_mode=preprocess_mode,
+        interactive_html=interactive_html,
+        interactive_max_points=interactive_max_points,
+        raw_segments_for_plot=ingest.raw_segments_for_plot,
+        prepared_segments_for_plot=ingest.prepared_segments_for_plot,
+        smoothing_window=plot_smoothing_window,
+    )
+
+    # Stage 5: Manifest + Logging
+    _manifest_stage(
+        target=target, started_at=started_at, run_started_utc=run_started_utc,
+        refresh_cache=refresh_cache, outlier_sigma=outlier_sigma,
+        flatten_window_length=flatten_window_length,
+        preprocess_enabled=preprocess_enabled, no_flatten=no_flatten,
+        preprocess_mode=preprocess_mode, authors=authors,
+        interactive_html=interactive_html,
+        interactive_max_points=interactive_max_points,
+        plot_enabled=plot_enabled, plot_mode=plot_mode,
+        run_bls=run_bls, bls_mode=bls_mode,
+        bls_period_min_days=bls_period_min_days,
+        bls_period_max_days=bls_period_max_days,
+        bls_duration_min_hours=bls_duration_min_hours,
+        bls_duration_max_hours=bls_duration_max_hours,
+        bls_n_periods=bls_n_periods, bls_n_durations=bls_n_durations,
+        bls_top_n=bls_top_n, config_schema_version=config_schema_version,
+        config_preset_id=config_preset_id,
+        config_preset_version=config_preset_version,
+        config_preset_hash=config_preset_hash,
+        data_source=ingest.data_source, n_points_raw=n_points_raw,
+        n_points_prepared=n_points_prepared, time_min=time_min, time_max=time_max,
+        raw_cache_path=ingest.raw_cache_path,
+        prepared_cache_path=ingest.prepared_cache_path,
+        metrics_csv_path=metrics_csv_path, metrics_json_path=metrics_json_path,
+        metrics_cache_path=metrics_cache_path,
+        metrics_cache_hit=metrics_cache_hit, metrics_payload=metrics_payload,
+        search_result=search, plot_result=plots,
+    )
+
+    return plots.output_paths[0] if plots.output_paths else None

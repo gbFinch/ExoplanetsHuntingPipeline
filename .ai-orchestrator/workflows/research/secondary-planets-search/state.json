@@ -1,0 +1,113 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "secondary-planets-search",
+    "created": "2026-02-28T22:17:26+01:00",
+    "updated": "2026-02-28T22:20:00+01:00",
+    "status": "awaiting_approval"
+  },
+  "classification": {
+    "primary_type": "research",
+    "secondary_types": [],
+    "rationale": "The context explicitly declares type 'research' and the goal is to investigate algorithms and approaches for iterative BLS transit subtraction — no code is produced."
+  },
+  "codebase_snapshot": {
+    "scanned_at": "2026-02-28T22:17:26+01:00",
+    "has_existing_code": true,
+    "detected_stack": {
+      "language": "Python",
+      "runtime": "Python 3.10+",
+      "framework": "lightkurve + astropy",
+      "build_tool": "setuptools",
+      "test_framework": "pytest",
+      "package_manager": "pip"
+    },
+    "folder_structure": "src/exohunt/\n  __init__.py\n  bls.py\n  cache.py\n  cli.py\n  comparison.py\n  config.py\n  ingest.py\n  models.py\n  parameters.py\n  pipeline.py\n  plotting.py\n  preprocess.py\n  progress.py\n  vetting.py\n  presets/\n    quicklook.toml\n    science-default.toml\n    deep-search.toml\ntests/\n  test_smoke.py\n  test_config.py\n  test_cli.py\n  test_analysis_modules.py\n  fixtures/",
+    "source_files": [
+      "src/exohunt/__init__.py",
+      "src/exohunt/bls.py",
+      "src/exohunt/cache.py",
+      "src/exohunt/cli.py",
+      "src/exohunt/comparison.py",
+      "src/exohunt/config.py",
+      "src/exohunt/ingest.py",
+      "src/exohunt/models.py",
+      "src/exohunt/parameters.py",
+      "src/exohunt/pipeline.py",
+      "src/exohunt/plotting.py",
+      "src/exohunt/preprocess.py",
+      "src/exohunt/progress.py",
+      "src/exohunt/vetting.py"
+    ],
+    "test_files": [
+      "tests/test_smoke.py",
+      "tests/test_config.py",
+      "tests/test_cli.py",
+      "tests/test_analysis_modules.py"
+    ],
+    "config_files": [
+      "pyproject.toml",
+      ".pre-commit-config.yaml",
+      ".github/workflows/ci.yml"
+    ],
+    "summary": "Python 3.10+ exoplanet transit search pipeline using lightkurve and astropy. 14 source files implementing ingest, preprocessing (Savitzky-Golay flatten), single-pass BLS search, vetting (odd/even depth, alias/harmonic checks), parameter estimation, plotting, and CLI. 4 test files using pytest. No existing transit subtraction, residual computation, or iterative search logic."
+  },
+  "chain": [
+    {
+      "sequence": 1,
+      "agent_id": "research",
+      "agent_version": "1.0.0",
+      "artifact": "01-research.md",
+      "artifact_type": "document",
+      "status": "awaiting_approval",
+      "human_gate": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "started": "2026-02-28T22:18:00+01:00",
+          "completed": "2026-02-28T22:20:00+01:00",
+          "critic_verdict": {
+            "verdict": "pass",
+            "scores": {
+              "relevance": 9,
+              "depth": 9,
+              "objectivity": 9,
+              "structure": 8,
+              "actionability": 9
+            },
+            "average_score": 8.8,
+            "issues": [
+              {
+                "severity": "minor",
+                "description": "Comparison Matrix for subtraction models could include a 'data continuity preservation' row.",
+                "location": "Section 4.1"
+              },
+              {
+                "severity": "suggestion",
+                "description": "Detection limit finding could include the concrete SNR formula.",
+                "location": "Section 3.5"
+              },
+              {
+                "severity": "minor",
+                "description": "Cross-iteration 1% filter threshold needs justification based on grid resolution.",
+                "location": "Section 3.8.3"
+              }
+            ],
+            "summary": "Comprehensive research covering all 8 topics with code-level analysis and prioritized recommendations. All key questions answered with evidence. Minor structural improvements possible."
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 2,
+      "agent_id": "summary",
+      "agent_version": "1.0.0",
+      "artifact": null,
+      "artifact_type": "document",
+      "status": "pending",
+      "human_gate": false,
+      "attempts": []
+    }
+  ],
+  "errors": []
+}

@@ -1,0 +1,35 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "bls-pipeline-improvement-p0",
+    "created": "2026-03-01T09:43:40Z",
+    "updated": "2026-03-01T10:00:00Z",
+    "status": "completed"
+  },
+  "classification": {
+    "primary_type": "bugfix",
+    "secondary_types": [],
+    "rationale": "7 P0 critical issues from quality audit of existing BLS pipeline code."
+  },
+  "codebase_snapshot": {
+    "scanned_at": "2026-03-01T09:43:40Z",
+    "has_existing_code": true,
+    "detected_stack": {"language": "Python", "runtime": "Python 3.10+", "framework": "lightkurve/astropy/numpy/matplotlib", "build_tool": "setuptools", "test_framework": "pytest", "package_manager": "pip"},
+    "folder_structure": "src/exohunt/\n  bls.py\n  vetting.py\n  preprocess.py\n  pipeline.py\n  plotting.py\n  config.py\n  presets/\ntests/",
+    "source_files": ["src/exohunt/bls.py","src/exohunt/vetting.py","src/exohunt/preprocess.py","src/exohunt/pipeline.py","src/exohunt/plotting.py","src/exohunt/config.py","src/exohunt/cli.py"],
+    "test_files": ["tests/test_smoke.py","tests/test_config.py","tests/test_cli.py","tests/test_analysis_modules.py","tests/test_p0_fixes.py"],
+    "config_files": ["pyproject.toml"],
+    "summary": "Python 3.10+ exoplanet transit-search pipeline. 12 source files, 5 test files, 3 TOML presets."
+  },
+  "chain": [
+    {"sequence":1,"agent_id":"bug-report","agent_version":"1.0.0","artifact":"01-bug-report.md","artifact_type":"document","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:44:00Z","finished":"2026-03-01T09:45:00Z","verdict":{"verdict":"pass","average_score":9.0}}]},
+    {"sequence":2,"agent_id":"bug-analysis","agent_version":"1.0.0","artifact":"02-bug-analysis.md","artifact_type":"document","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:45:10Z","finished":"2026-03-01T09:46:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":3,"agent_id":"root-cause","agent_version":"1.0.0","artifact":"03-root-cause.md","artifact_type":"document","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:46:10Z","finished":"2026-03-01T09:47:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":4,"agent_id":"fix-plan","agent_version":"1.0.0","artifact":"04-fix-plan.md","artifact_type":"document","status":"completed","human_gate":true,"attempts":[{"started":"2026-03-01T09:47:10Z","finished":"2026-03-01T09:48:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":5,"agent_id":"repro-test","agent_version":"1.0.0","artifact":"tests/test_p0_fixes.py","artifact_type":"code","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:52:03Z","finished":"2026-03-01T09:53:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":6,"agent_id":"fix","agent_version":"1.0.0","artifact":"12 source files","artifact_type":"code","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:53:10Z","finished":"2026-03-01T09:56:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":7,"agent_id":"verification","agent_version":"1.0.0","artifact":"07-verification.md","artifact_type":"document","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:56:00Z","finished":"2026-03-01T09:58:00Z","verdict":{"verdict":"pass","average_score":8.8}}]},
+    {"sequence":8,"agent_id":"summary","agent_version":"1.0.0","artifact":"08-summary.md","artifact_type":"document","status":"completed","human_gate":false,"attempts":[{"started":"2026-03-01T09:58:00Z","finished":"2026-03-01T10:00:00Z","verdict":{"verdict":"pass","average_score":8.8}}]}
+  ],
+  "errors": []
+}

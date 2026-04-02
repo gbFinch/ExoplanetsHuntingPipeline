@@ -42,6 +42,8 @@ class PreprocessConfig:
     outlier_sigma: float
     flatten_window_length: int
     flatten: bool
+    iterative_flatten: bool
+    transit_mask_padding_factor: float
 
 
 @dataclass(frozen=True)
@@ -50,6 +52,7 @@ class PlotConfig:
     mode: str
     interactive_html: bool
     interactive_max_points: int
+    smoothing_window: int
 
 
 @dataclass(frozen=True)
@@ -63,6 +66,35 @@ class BLSConfig:
     n_periods: int
     n_durations: int
     top_n: int
+    min_snr: float
+    compute_fap: bool
+    fap_iterations: int
+    iterative_masking: bool
+    unique_period_separation_fraction: float
+    iterative_passes: int
+    subtraction_model: str
+    iterative_top_n: int
+    transit_mask_padding_factor: float
+
+
+@dataclass(frozen=True)
+class VettingConfig:
+    min_transit_count: int
+    odd_even_max_mismatch_fraction: float
+    alias_tolerance_fraction: float
+    secondary_eclipse_max_fraction: float
+    depth_consistency_max_fraction: float
+
+
+@dataclass(frozen=True)
+class ParameterConfig:
+    stellar_density_kg_m3: float
+    duration_ratio_min: float
+    duration_ratio_max: float
+    apply_limb_darkening_correction: bool
+    limb_darkening_u1: float
+    limb_darkening_u2: float
+    tic_density_lookup: bool
 
 
 @dataclass(frozen=True)
@@ -74,6 +106,8 @@ class RuntimeConfig:
     preprocess: PreprocessConfig
     plot: PlotConfig
     bls: BLSConfig
+    vetting: VettingConfig
+    parameters: ParameterConfig
 
 
 _DEFAULTS: dict[str, Any] = {
@@ -91,12 +125,15 @@ _DEFAULTS: dict[str, Any] = {
         "outlier_sigma": 5.0,
         "flatten_window_length": 401,
         "flatten": True,
+        "iterative_flatten": False,
+        "transit_mask_padding_factor": 1.5,
     },
     "plot": {
         "enabled": True,
         "mode": "stitched",
         "interactive_html": False,
         "interactive_max_points": 200_000,
+        "smoothing_window": 5,
     },
     "bls": {
         "enabled": True,
@@ -108,6 +145,31 @@ _DEFAULTS: dict[str, Any] = {
         "n_periods": 2000,
         "n_durations": 12,
         "top_n": 5,
+        "min_snr": 7.0,
+        "compute_fap": False,
+        "fap_iterations": 1000,
+        "iterative_masking": False,
+        "unique_period_separation_fraction": 0.05,
+        "iterative_passes": 1,
+        "subtraction_model": "box_mask",
+        "iterative_top_n": 1,
+        "transit_mask_padding_factor": 1.5,
+    },
+    "vetting": {
+        "min_transit_count": 2,
+        "odd_even_max_mismatch_fraction": 0.30,
+        "alias_tolerance_fraction": 0.02,
+        "secondary_eclipse_max_fraction": 0.30,
+        "depth_consistency_max_fraction": 0.50,
+    },
+    "parameters": {
+        "stellar_density_kg_m3": 1408.0,
+        "duration_ratio_min": 0.05,
+        "duration_ratio_max": 1.8,
+        "apply_limb_darkening_correction": False,
+        "limb_darkening_u1": 0.4,
+        "limb_darkening_u2": 0.2,
+        "tic_density_lookup": False,
     },
 }
 
@@ -208,7 +270,7 @@ def _dump_toml(payload: Mapping[str, Any]) -> str:
     for key in scalar_keys:
         if key in payload:
             lines.append(f"{key} = {_encode_toml_value(payload[key])}")
-    for section in ["io", "ingest", "preprocess", "plot", "bls"]:
+    for section in ["io", "ingest", "preprocess", "plot", "bls", "vetting", "parameters"]:
         value = payload.get(section)
         if not isinstance(value, Mapping):
             continue
@@ -432,12 +494,17 @@ def resolve_runtime_config(
             preprocess_data, "flatten_window_length", scope="preprocess"
         ),
         flatten=_expect_bool(preprocess_data, "flatten", scope="preprocess"),
+        iterative_flatten=_expect_bool(preprocess_data, "iterative_flatten", scope="preprocess"),
+        transit_mask_padding_factor=_expect_float(
+            preprocess_data, "transit_mask_padding_factor", scope="preprocess"
+        ),
     )
     plot = PlotConfig(
         enabled=_expect_bool(plot_data, "enabled", scope="plot"),
         mode=_normalize_mode(plot_data["mode"], key_path="plot.mode"),
         interactive_html=_expect_bool(plot_data, "interactive_html", scope="plot"),
         interactive_max_points=_expect_int(plot_data, "interactive_max_points", scope="plot"),
+        smoothing_window=_expect_int(plot_data, "smoothing_window", scope="plot"),
     )
     bls = BLSConfig(
         enabled=_expect_bool(bls_data, "enabled", scope="bls"),
@@ -449,6 +516,61 @@ def resolve_runtime_config(
         n_periods=_expect_int(bls_data, "n_periods", scope="bls"),
         n_durations=_expect_int(bls_data, "n_durations", scope="bls"),
         top_n=_expect_int(bls_data, "top_n", scope="bls"),
+        min_snr=_expect_float(bls_data, "min_snr", scope="bls"),
+        compute_fap=_expect_bool(bls_data, "compute_fap", scope="bls"),
+        fap_iterations=_expect_int(bls_data, "fap_iterations", scope="bls"),
+        iterative_masking=_expect_bool(bls_data, "iterative_masking", scope="bls"),
+        unique_period_separation_fraction=_expect_float(
+            bls_data, "unique_period_separation_fraction", scope="bls"
+        ),
+        iterative_passes=_expect_int(bls_data, "iterative_passes", scope="bls"),
+        subtraction_model=str(bls_data.get("subtraction_model", "box_mask")),
+        iterative_top_n=_expect_int(bls_data, "iterative_top_n", scope="bls"),
+        transit_mask_padding_factor=_expect_float(
+            bls_data, "transit_mask_padding_factor", scope="bls"
+        ),
+    )
+
+    vetting_data = merged["vetting"]
+    vetting = VettingConfig(
+        min_transit_count=_expect_int(vetting_data, "min_transit_count", scope="vetting"),
+        odd_even_max_mismatch_fraction=_expect_float(
+            vetting_data, "odd_even_max_mismatch_fraction", scope="vetting"
+        ),
+        alias_tolerance_fraction=_expect_float(
+            vetting_data, "alias_tolerance_fraction", scope="vetting"
+        ),
+        secondary_eclipse_max_fraction=_expect_float(
+            vetting_data, "secondary_eclipse_max_fraction", scope="vetting"
+        ),
+        depth_consistency_max_fraction=_expect_float(
+            vetting_data, "depth_consistency_max_fraction", scope="vetting"
+        ),
+    )
+
+    parameters_data = merged["parameters"]
+    parameters = ParameterConfig(
+        stellar_density_kg_m3=_expect_float(
+            parameters_data, "stellar_density_kg_m3", scope="parameters"
+        ),
+        duration_ratio_min=_expect_float(
+            parameters_data, "duration_ratio_min", scope="parameters"
+        ),
+        duration_ratio_max=_expect_float(
+            parameters_data, "duration_ratio_max", scope="parameters"
+        ),
+        apply_limb_darkening_correction=_expect_bool(
+            parameters_data, "apply_limb_darkening_correction", scope="parameters"
+        ),
+        limb_darkening_u1=_expect_float(
+            parameters_data, "limb_darkening_u1", scope="parameters"
+        ),
+        limb_darkening_u2=_expect_float(
+            parameters_data, "limb_darkening_u2", scope="parameters"
+        ),
+        tic_density_lookup=_expect_bool(
+            parameters_data, "tic_density_lookup", scope="parameters"
+        ),
     )
 
     if preprocess.outlier_sigma <= 0.0:
@@ -469,6 +591,8 @@ def resolve_runtime_config(
         raise ConfigValidationError(
             "Invalid bls grid sizes: n_periods, n_durations, and top_n must all be >= 1."
         )
+    if bls.min_snr < 0.0:
+        raise ConfigValidationError("Invalid bls.min_snr: must be >= 0.")
     if plot.interactive_max_points < 1000:
         raise ConfigValidationError("Invalid plot.interactive_max_points: must be >= 1000.")
     if plot.mode == "per-sector" and preprocess.mode != "per-sector":
@@ -484,4 +608,6 @@ def resolve_runtime_config(
         preprocess=preprocess,
         plot=plot,
         bls=bls,
+        vetting=vetting,
+        parameters=parameters,
     )

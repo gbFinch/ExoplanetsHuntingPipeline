@@ -743,6 +743,7 @@ def test_vet_bls_candidates_flags_alias_harmonic():
             power=10.0,
             transit_time=0.2,
             transit_count_estimate=20.0,
+            snr=10.0,
         ),
         BLSCandidate(
             rank=2,
@@ -753,6 +754,7 @@ def test_vet_bls_candidates_flags_alias_harmonic():
             power=5.0,
             transit_time=0.2,
             transit_count_estimate=10.0,
+            snr=8.0,
         ),
     ]
     vet = vet_bls_candidates(lc_prepared=lc, candidates=candidates)
@@ -782,6 +784,7 @@ def test_vet_bls_candidates_flags_odd_even_mismatch():
         power=8.0,
         transit_time=0.4,
         transit_count_estimate=40.0,
+        snr=10.0,
     )
     vet = vet_bls_candidates(lc_prepared=lc, candidates=[candidate])
     assert not vet[1].pass_odd_even_depth
@@ -798,6 +801,7 @@ def test_estimate_candidate_parameters_returns_radius_ratio_and_duration_check()
         power=0.02,
         transit_time=0.3,
         transit_count_estimate=10.0,
+        snr=10.0,
     )
     estimates = estimate_candidate_parameters([candidate])
     assert 1 in estimates
@@ -827,6 +831,7 @@ def test_save_candidate_diagnostics_writes_assets(monkeypatch, tmp_path):
             power=1.0e-3,
             transit_time=0.2,
             transit_count_estimate=4.0,
+            snr=10.0,
         )
     ]
     written = save_candidate_diagnostics(
@@ -857,6 +862,7 @@ def test_write_bls_candidates_outputs_structured_files(monkeypatch, tmp_path):
             power=0.03,
             transit_time=100.0,
             transit_count_estimate=25.0,
+            snr=10.0,
         )
     ]
     metadata = {

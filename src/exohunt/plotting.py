@@ -134,7 +134,9 @@ def save_raw_vs_prepared_plot(
     lc_prepared: lk.LightCurve,
     boundaries: list[float],
     output_key: str = "stitched",
+    smoothing_window: int = 5,
 ) -> Path:
+    # Fix: Change 14 — Redesign raw-vs-prepared plot (PL1)
     output_dir = _target_artifact_dir(target, "plots")
     output_dir.mkdir(parents=True, exist_ok=True)
     output_path = (
@@ -147,38 +149,55 @@ def save_raw_vs_prepared_plot(
     prep_flux = np.asarray(lc_prepared.flux.value, dtype=float)
     prep_flux_ppm = _relative_flux_to_ppm(prep_flux)
 
-    fig, (ax_raw_old, ax_prepared_old, ax_prepared_new) = plt.subplots(
+    fig, (ax_overlay, ax_residual, ax_prepared_new) = plt.subplots(
         3, 1, figsize=(10, 9), sharex=True
     )
 
-    # Figure 1: raw old style
-    ax_raw_old.plot(raw_time, raw_flux, ".", markersize=0.5, alpha=0.7)
-    ax_raw_old.set_title(f"TESS Light Curve (Raw, Old Style): {target}")
-    ax_raw_old.set_ylabel("Flux")
+    # Panel 1: Overlay raw (gray) and prepared (purple) on same axes
+    ax_overlay.plot(raw_time, raw_flux, ".", markersize=0.4, alpha=0.3, color="#999999",
+                    label="Raw", rasterized=True)
+    ax_overlay.plot(prep_time, prep_flux, ".", markersize=0.4, alpha=0.5, color="#4b2e83",
+                    label="Prepared", rasterized=True)
+    ax_overlay.set_title(f"Raw vs Prepared Overlay: {target}")
+    ax_overlay.set_ylabel("Flux")
+    ax_overlay.legend(loc="upper right", markerscale=6, fontsize=8)
 
-    # Figure 2: prepared old style
-    ax_prepared_old.plot(prep_time, prep_flux, ".", markersize=0.5, alpha=0.7)
-    ax_prepared_old.set_title("Prepared (Old Style Scatter)")
-    ax_prepared_old.set_ylabel("Relative Flux")
+    # Panel 2: Residual (removed trend) — interpolate prepared onto raw time grid
+    if len(raw_time) > 0 and len(prep_time) > 0:
+        # Compute binned medians for both raw and prepared on a common grid
+        raw_bx, _, raw_b50, _ = _binned_summary(raw_time, raw_flux, bin_width_days=0.05)
+        prep_bx, _, prep_b50, _ = _binned_summary(prep_time, prep_flux, bin_width_days=0.05)
+        if len(raw_bx) > 0 and len(prep_bx) > 0:
+            raw_b50_s = _smooth_series(raw_b50, window=15)
+            prep_b50_s = _smooth_series(prep_b50, window=15)
+            # Interpolate prepared trend onto raw time grid
+            from numpy import interp as np_interp
+            prep_on_raw = np_interp(raw_bx, prep_bx, prep_b50_s)
+            residual = raw_b50_s - prep_on_raw
+            ax_residual.fill_between(raw_bx, 0, residual, color="#e76f51", alpha=0.3)
+            ax_residual.plot(raw_bx, residual, color="#e76f51", linewidth=1.0, alpha=0.8)
+    ax_residual.axhline(0, color="gray", linewidth=0.5, alpha=0.5)
+    ax_residual.set_title("Removed Trend (Raw − Prepared baseline)")
+    ax_residual.set_ylabel("Residual Flux")
 
-    # Figure 3: prepared new style
+    # Panel 3: Prepared with binned percentile bands (kept from original)
     prep_x, prep_p10, prep_p50, prep_p90 = _binned_summary(prep_time, prep_flux_ppm)
     if len(prep_x):
-        prep_p10_s = _smooth_series(prep_p10, window=9)
-        prep_p50_s = _smooth_series(prep_p50, window=9)
-        prep_p90_s = _smooth_series(prep_p90, window=9)
+        prep_p10_s = _smooth_series(prep_p10, window=smoothing_window)
+        prep_p50_s = _smooth_series(prep_p50, window=smoothing_window)
+        prep_p90_s = _smooth_series(prep_p90, window=smoothing_window)
         ax_prepared_new.fill_between(
             prep_x, prep_p10_s, prep_p90_s, color="#6a3d9a", alpha=0.12, linewidth=0
         )
         ax_prepared_new.plot(prep_x, prep_p50_s, color="#4b2e83", linewidth=1.2, alpha=0.95)
-    ax_prepared_new.set_title("Prepared (New Style: density + trend band)")
+    ax_prepared_new.set_title("Prepared (density + trend band)")
     ax_prepared_new.set_xlabel("Time [BTJD]")
     ax_prepared_new.set_ylabel("Relative Flux [ppm]")
     ax_prepared_new.set_ylim(*_robust_ylim(prep_flux_ppm))
 
     for boundary in boundaries:
-        ax_raw_old.axvline(boundary, color="gray", alpha=0.2, linewidth=0.8)
-        ax_prepared_old.axvline(boundary, color="gray", alpha=0.2, linewidth=0.8)
+        ax_overlay.axvline(boundary, color="gray", alpha=0.2, linewidth=0.8)
+        ax_residual.axvline(boundary, color="gray", alpha=0.2, linewidth=0.8)
         ax_prepared_new.axvline(boundary, color="gray", alpha=0.2, linewidth=0.8)
 
     fig.tight_layout()
@@ -247,33 +266,38 @@ def save_raw_vs_prepared_plot_interactive(
 
     fig = make_subplots(rows=3, cols=1, shared_xaxes=True, vertical_spacing=0.06)
 
-    # Figure 1: raw old style
+    # Fix: Change 14 — Redesign interactive plot with overlay + residual (PL1)
+    # Panel 1: Overlay raw (gray) and prepared (purple)
     fig.add_trace(
         go.Scattergl(
-            x=raw_time_ds,
-            y=raw_flux_ds,
-            mode="markers",
-            marker={"size": 2, "opacity": 0.7},
-            name="Raw (old)",
-        ),
-        row=1,
-        col=1,
+            x=raw_time_ds, y=raw_flux_ds, mode="markers",
+            marker={"size": 2, "opacity": 0.3, "color": "#999999"}, name="Raw",
+        ), row=1, col=1,
     )
-
-    # Figure 2: prepared old style
     fig.add_trace(
         go.Scattergl(
-            x=prep_time_ds,
-            y=prep_flux_ds,
-            mode="markers",
-            marker={"size": 2, "opacity": 0.7},
-            name="Prepared (old)",
-        ),
-        row=2,
-        col=1,
+            x=prep_time_ds, y=prep_flux_ds, mode="markers",
+            marker={"size": 2, "opacity": 0.5, "color": "#4b2e83"}, name="Prepared",
+        ), row=1, col=1,
     )
 
-    # Figure 3: prepared new style
+    # Panel 2: Residual (removed trend)
+    raw_bx, _, raw_b50, _ = _binned_summary(raw_time_ds, raw_flux_ds, bin_width_days=0.05)
+    prep_bx, _, prep_b50, _ = _binned_summary(prep_time_ds, prep_flux_ds, bin_width_days=0.05)
+    if len(raw_bx) > 0 and len(prep_bx) > 0:
+        raw_b50_s = _smooth_series(raw_b50, window=15)
+        prep_b50_s = _smooth_series(prep_b50, window=15)
+        prep_on_raw = np.interp(raw_bx, prep_bx, prep_b50_s)
+        residual = raw_b50_s - prep_on_raw
+        fig.add_trace(
+            go.Scatter(
+                x=raw_bx, y=residual, mode="lines",
+                line={"width": 1.2, "color": "rgba(231,111,81,0.8)"}, name="Residual",
+                fill="tozeroy", fillcolor="rgba(231,111,81,0.2)",
+            ), row=2, col=1,
+        )
+
+    # Panel 3: Prepared with binned percentile bands (kept from original)
     prep_bx, prep_bp10, prep_bp50, prep_bp90 = _binned_summary(prep_time_ds, prep_flux_ppm_ds)
     if len(prep_bx):
         prep_bp10_s = _smooth_series(prep_bp10, window=9)
@@ -323,13 +347,13 @@ def save_raw_vs_prepared_plot_interactive(
         fig.add_vline(x=boundary, line_width=1, line_color="gray", opacity=0.25)
 
     fig.update_layout(
-        title=f"TESS Light Curve (3-panel comparison): {target}",
-        showlegend=False,
+        title=f"TESS Light Curve (overlay + residual + prepared): {target}",
+        showlegend=True,
         height=1050,
     )
     fig.update_xaxes(title_text="Time [BTJD]", row=3, col=1, rangeslider={"visible": True})
-    fig.update_yaxes(title_text="Flux", row=1, col=1)
-    fig.update_yaxes(title_text="Relative Flux", row=2, col=1)
+    fig.update_yaxes(title_text="Flux (overlay)", row=1, col=1)
+    fig.update_yaxes(title_text="Residual Flux", row=2, col=1)
     fig.update_yaxes(title_text="Relative Flux [ppm]", row=3, col=1)
     prep_ymin, prep_ymax = _robust_ylim(prep_flux_ppm_ds)
     fig.update_yaxes(range=[prep_ymin, prep_ymax], row=3, col=1)
@@ -372,6 +396,9 @@ def save_candidate_diagnostics(
     candidates: list[BLSCandidate],
     period_grid_days: np.ndarray,
     power_grid: np.ndarray,
+    *,
+    vetting_results: dict[int, Any] | None = None,
+    parameter_estimates: dict[int, Any] | None = None,
 ) -> list[tuple[Path, Path]]:
     output_dir = _target_artifact_dir(target, "diagnostics")
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -396,11 +423,21 @@ def save_candidate_diagnostics(
         ax_p.set_xlabel("Period [days]")
         ax_p.set_ylabel("BLS Power")
         ax_p.set_title(f"BLS Periodogram: {target} (candidate #{candidate.rank})")
+        # R12: SNR annotation
+        if len(power_grid):
+            peak_idx = np.argmin(np.abs(period_grid_days - candidate.period_days))
+            ax_p.annotate(
+                f"SNR={candidate.snr:.1f}",
+                xy=(candidate.period_days, power_grid[peak_idx] if peak_idx < len(power_grid) else 0),
+                xytext=(10, 10), textcoords="offset points",
+                fontsize=8, color="#e76f51", fontweight="bold",
+            )
         fig_p.tight_layout()
         fig_p.savefig(periodogram_path, dpi=150)
         plt.close(fig_p)
 
-        fig_f, (ax_full, ax_zoom) = plt.subplots(2, 1, figsize=(9, 6.2), sharey=True)
+        fig_f, axes_f = plt.subplots(2, 1, figsize=(9, 6.2), sharey=True)
+        ax_full, ax_zoom = axes_f[0], axes_f[1]
         phase_days = _phase_fold_days(time, candidate.period_days, candidate.transit_time)
         order = np.argsort(phase_days)
         phase_hours = phase_days[order] * 24.0
@@ -450,6 +487,23 @@ def save_candidate_diagnostics(
             f"Phase Folded (Zoom ±{zoom_half_width:.1f} h, ~{zoom_half_width / candidate.duration_hours:.1f}D)"
         )
         ax_zoom.legend(loc="upper right")
+        # R12: Box-model overlay on full phase-fold
+        box_x = np.array([-half_window_hours, -half_window_hours, half_window_hours, half_window_hours])
+        box_y = np.array([0.0, -candidate.depth_ppm, -candidate.depth_ppm, 0.0])
+        ax_full.plot(box_x, box_y, color="#2a9d8f", linewidth=1.5, alpha=0.7, label="Box model")
+        ax_zoom.plot(box_x, box_y, color="#2a9d8f", linewidth=1.5, alpha=0.7, label="Box model")
+        # R12: Parameter text box
+        vr = (vetting_results or {}).get(int(candidate.rank))
+        vetting_str = "N/A"
+        if vr is not None:
+            vetting_str = "PASS" if vr.vetting_pass else "FAIL"
+        param_text = (
+            f"P={candidate.period_days:.4f}d  D={candidate.duration_hours:.2f}h\n"
+            f"Depth={candidate.depth_ppm:.1f}ppm  SNR={candidate.snr:.1f}\n"
+            f"Vetting: {vetting_str}"
+        )
+        fig_f.text(0.02, 0.01, param_text, fontsize=7, family="monospace",
+                   verticalalignment="bottom", bbox=dict(boxstyle="round", facecolor="wheat", alpha=0.5))
         fig_f.tight_layout()
         fig_f.savefig(phasefold_path, dpi=150)
         plt.close(fig_f)

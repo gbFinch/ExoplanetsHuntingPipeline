@@ -11,14 +11,17 @@ authors = ["SPOC"]
 enabled = true
 mode = "per-sector"
 outlier_sigma = 5.0
-flatten_window_length = 401
+flatten_window_length = 801
 flatten = true
+iterative_flatten = false
+transit_mask_padding_factor = 1.5
 
 [plot]
-enabled = false
-mode = "stitched"
+enabled = true
+mode = "per-sector"
 interactive_html = false
 interactive_max_points = 200000
+smoothing_window = 5
 
 [bls]
 enabled = true
@@ -30,3 +33,25 @@ duration_max_hours = 10.0
 n_periods = 2000
 n_durations = 12
 top_n = 5
+unique_period_separation_fraction = 0.05
+iterative_masking = false
+iterative_passes = 1
+subtraction_model = "box_mask"
+iterative_top_n = 1
+transit_mask_padding_factor = 1.5
+
+[vetting]
+min_transit_count = 2
+odd_even_max_mismatch_fraction = 0.30
+alias_tolerance_fraction = 0.02
+secondary_eclipse_max_fraction = 0.30
+depth_consistency_max_fraction = 0.50
+
+[parameters]
+stellar_density_kg_m3 = 1408.0
+duration_ratio_min = 0.05
+duration_ratio_max = 1.8
+apply_limb_darkening_correction = false
+limb_darkening_u1 = 0.4
+limb_darkening_u2 = 0.2
+tic_density_lookup = false

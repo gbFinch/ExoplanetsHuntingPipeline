@@ -1,0 +1,230 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "bls-pipeline-improvement-p1",
+    "created": "2026-03-01T11:33:16Z",
+    "updated": "2026-03-01T11:50:00Z",
+    "status": "completed"
+  },
+  "classification": {
+    "primary_type": "feature",
+    "secondary_types": [],
+    "rationale": "Adding seven new capabilities (R7-R13) to an existing BLS transit-search pipeline \u2014 new config sections, vetting checks, diagnostic enhancements, and optional processing modes."
+  },
+  "codebase_snapshot": {
+    "scanned_at": "2026-03-01T11:33:16Z",
+    "has_existing_code": true,
+    "detected_stack": {
+      "language": "Python",
+      "runtime": "Python 3.10+",
+      "framework": "lightkurve/astropy",
+      "build_tool": "setuptools",
+      "test_framework": "pytest",
+      "package_manager": "pip"
+    },
+    "folder_structure": "src/exohunt/\n  __init__.py\n  bls.py\n  cache.py\n  cli.py\n  comparison.py\n  config.py\n  ingest.py\n  models.py\n  parameters.py\n  pipeline.py\n  plotting.py\n  preprocess.py\n  progress.py\n  vetting.py\n  presets/\n    __init__.py\n    quicklook.toml\n    science-default.toml\n    deep-search.toml\ntests/\n  test_analysis_modules.py\n  test_cli.py\n  test_config.py\n  test_p0_fixes.py\n  test_smoke.py\n  fixtures/",
+    "source_files": [
+      "src/exohunt/__init__.py",
+      "src/exohunt/bls.py",
+      "src/exohunt/cache.py",
+      "src/exohunt/cli.py",
+      "src/exohunt/comparison.py",
+      "src/exohunt/config.py",
+      "src/exohunt/ingest.py",
+      "src/exohunt/models.py",
+      "src/exohunt/parameters.py",
+      "src/exohunt/pipeline.py",
+      "src/exohunt/plotting.py",
+      "src/exohunt/preprocess.py",
+      "src/exohunt/progress.py",
+      "src/exohunt/vetting.py"
+    ],
+    "test_files": [
+      "tests/test_analysis_modules.py",
+      "tests/test_cli.py",
+      "tests/test_config.py",
+      "tests/test_p0_fixes.py",
+      "tests/test_smoke.py"
+    ],
+    "config_files": [
+      "pyproject.toml",
+      ".pre-commit-config.yaml",
+      ".github/workflows/ci.yml"
+    ],
+    "summary": "Python 3.10+ exoplanet transit-search pipeline using lightkurve/astropy/numpy/matplotlib. 14 source files across ingest, preprocess, BLS search, vetting, plotting, config, and CLI modules. 5 test files using pytest. Three TOML presets (quicklook, science-default, deep-search). P0 fixes (R1-R6) already applied."
+  },
+  "chain": [
+    {
+      "sequence": 1,
+      "agent_id": "spec",
+      "agent_version": "1.0.0",
+      "artifact": "01-spec.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:34:00Z",
+          "finished": "2026-03-01T11:35:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 2,
+      "agent_id": "analysis",
+      "agent_version": "1.0.0",
+      "artifact": "02-analysis.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:35:30Z",
+          "finished": "2026-03-01T11:36:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 3,
+      "agent_id": "architecture",
+      "agent_version": "1.0.0",
+      "artifact": "03-architecture.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": true,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:37:00Z",
+          "finished": "2026-03-01T11:38:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 4,
+      "agent_id": "impl-plan",
+      "agent_version": "1.0.0",
+      "artifact": "04-implementation-plan.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": true,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:40:09Z",
+          "finished": "2026-03-01T11:41:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 5,
+      "agent_id": "test-spec",
+      "agent_version": "1.0.0",
+      "artifact": "05-test-spec.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:43:34Z",
+          "finished": "2026-03-01T11:44:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 8.8
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 6,
+      "agent_id": "tests",
+      "agent_version": "1.0.0",
+      "artifact": "tests/test_p1_fixes.py",
+      "artifact_type": "code",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:44:00Z",
+          "finished": "2026-03-01T11:45:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 8.8
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 7,
+      "agent_id": "code",
+      "agent_version": "1.0.0",
+      "artifact": "bls.py,vetting.py,config.py,pipeline.py,plotting.py,cli.py,presets",
+      "artifact_type": "code",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:45:00Z",
+          "finished": "2026-03-01T11:48:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 8,
+      "agent_id": "review",
+      "agent_version": "1.0.0",
+      "artifact": "08-review.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:48:00Z",
+          "finished": "2026-03-01T11:49:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 8.6
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 9,
+      "agent_id": "summary",
+      "agent_version": "1.0.0",
+      "artifact": "09-summary.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "started": "2026-03-01T11:49:00Z",
+          "finished": "2026-03-01T11:50:00Z",
+          "verdict": {
+            "verdict": "pass",
+            "average_score": 9.0
+          }
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

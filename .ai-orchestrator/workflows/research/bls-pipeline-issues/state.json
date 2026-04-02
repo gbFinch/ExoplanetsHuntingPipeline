@@ -1,0 +1,96 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "bls-pipeline-issues",
+    "created": "2026-02-28T22:45:05+01:00",
+    "updated": "2026-02-28T23:05:00+01:00",
+    "status": "completed"
+  },
+  "classification": {
+    "primary_type": "research",
+    "secondary_types": [],
+    "rationale": "The context explicitly sets Type: research. The goal is a comprehensive quality audit and improvement roadmap for the BLS transit-search pipeline — no code changes, only analysis and recommendations."
+  },
+  "codebase_snapshot": {
+    "scanned_at": "2026-02-28T22:45:05+01:00",
+    "has_existing_code": true,
+    "detected_stack": {
+      "language": "Python",
+      "runtime": "Python 3.10+",
+      "framework": "lightkurve/astropy",
+      "build_tool": "setuptools",
+      "test_framework": "pytest",
+      "package_manager": "pip"
+    },
+    "folder_structure": "src/exohunt/\n  bls.py, cache.py, cli.py, comparison.py, config.py, ingest.py, models.py,\n  parameters.py, pipeline.py, plotting.py, preprocess.py, progress.py, vetting.py\n  presets/ (quicklook.toml, science-default.toml, deep-search.toml)\ntests/ (test_smoke.py, test_config.py, test_cli.py, test_analysis_modules.py)",
+    "summary": "Python 3.10+ exoplanet transit-search pipeline using lightkurve, astropy, numpy, matplotlib. 13 source files, 4 test files, 3 presets."
+  },
+  "chain": [
+    {
+      "sequence": 1,
+      "agent_id": "research",
+      "agent_version": "1.0.0",
+      "artifact": "01-research.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": true,
+      "attempts": [
+        {
+          "attempt": 1,
+          "started": "2026-02-28T22:46:00+01:00",
+          "finished": "2026-02-28T22:50:00+01:00",
+          "critic_verdict": {
+            "verdict": "pass",
+            "scores": {
+              "relevance": 10,
+              "depth": 9,
+              "objectivity": 9,
+              "structure": 8,
+              "actionability": 10
+            },
+            "average_score": 9.2,
+            "issues": [
+              {"severity": "minor", "description": "Comparison Matrix could include specific citations.", "location": "Section 4"},
+              {"severity": "minor", "description": "YAML frontmatter references array is empty.", "location": "YAML frontmatter"},
+              {"severity": "suggestion", "description": "Issue B3 example could be more illustrative.", "location": "Section 3.1, Issue B3"}
+            ],
+            "summary": "Comprehensive research artifact identifying 28 issues. All key questions answered. Production-ready."
+          }
+        }
+      ]
+    },
+    {
+      "sequence": 2,
+      "agent_id": "summary",
+      "agent_version": "1.0.0",
+      "artifact": "02-summary.md",
+      "artifact_type": "document",
+      "status": "completed",
+      "human_gate": false,
+      "attempts": [
+        {
+          "attempt": 1,
+          "started": "2026-02-28T23:03:12+01:00",
+          "finished": "2026-02-28T23:05:00+01:00",
+          "critic_verdict": {
+            "verdict": "pass",
+            "scores": {
+              "completeness": 10,
+              "accuracy": 9,
+              "conciseness": 9,
+              "actionability": 10,
+              "standalone_clarity": 9
+            },
+            "average_score": 9.4,
+            "issues": [
+              {"severity": "minor", "description": "Chain Overview shows '—' for summary's own critic score; could note 'self (not evaluated)'.", "location": "Section 2, row 2"},
+              {"severity": "suggestion", "description": "Next Steps could include rough time estimates for project planning.", "location": "Section 7"}
+            ],
+            "summary": "Accurate, concise executive summary. All artifacts referenced. Stakeholder can understand full project state from this document alone."
+          }
+        }
+      ]
+    }
+  ],
+  "errors": []
+}

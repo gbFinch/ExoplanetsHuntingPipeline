@@ -93,12 +93,16 @@ def _load_npz_lightcurve(cache_path: Path) -> lk.LightCurve:
         return lk.LightCurve(time=cached["time"], flux=cached["flux"])
 
 
-def _save_npz_lightcurve(cache_path: Path, lc: lk.LightCurve) -> None:
+def _save_npz_lightcurve(cache_path: Path, lc: lk.LightCurve, *, no_cache: bool = False) -> None:
+    if no_cache:
+        return
     cache_path.parent.mkdir(parents=True, exist_ok=True)
     np.savez(cache_path, time=lc.time.value, flux=lc.flux.value)
 
 
-def _write_segment_manifest(target: str, cache_dir: Path, segments: list[LightCurveSegment]) -> None:
+def _write_segment_manifest(target: str, cache_dir: Path, segments: list[LightCurveSegment], *, no_cache: bool = False) -> None:
+    if no_cache:
+        return
     manifest_path = _segment_manifest_path(target, cache_dir)
     manifest_path.parent.mkdir(parents=True, exist_ok=True)
     payload = {

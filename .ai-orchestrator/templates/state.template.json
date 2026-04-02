@@ -1,0 +1,26 @@
+{
+  "version": "1.0.0",
+  "project": {
+    "name": "",
+    "created": "",
+    "updated": "",
+    "status": "not_started"
+  },
+  "classification": {
+    "primary_type": "",
+    "secondary_types": [],
+    "rationale": ""
+  },
+  "codebase_snapshot": {
+    "scanned_at": "",
+    "has_existing_code": false,
+    "detected_stack": {},
+    "folder_structure": "",
+    "source_files": [],
+    "test_files": [],
+    "config_files": [],
+    "summary": ""
+  },
+  "chain": [],
+  "errors": []
+}

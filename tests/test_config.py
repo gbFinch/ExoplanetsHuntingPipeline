@@ -149,7 +149,7 @@ def test_write_preset_config(tmp_path: Path):
     content = out_path.read_text(encoding="utf-8")
     assert 'preset = "science-default"' in content
     assert "[preprocess]" in content
-    assert "flatten_window_length = 401" in content
+    assert "flatten_window_length = 801" in content
 
 
 def test_get_builtin_preset_metadata_returns_stable_version_and_hash():

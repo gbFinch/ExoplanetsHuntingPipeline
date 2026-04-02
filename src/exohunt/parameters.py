@@ -1,14 +1,24 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import logging
 import math
 
 from exohunt.bls import BLSCandidate
 
 
+LOGGER = logging.getLogger(__name__)
+
 _G_SI = 6.67430e-11
 _DEFAULT_STELLAR_DENSITY_KG_M3 = 1408.0
 _R_SUN_IN_R_EARTH = 109.076
+_M_SUN_KG = 1.989e30
+_R_SUN_M = 6.957e8
+
+try:
+    from astroquery.mast import Catalogs
+except ImportError:  # pragma: no cover
+    Catalogs = None  # type: ignore[assignment,misc]
 
 
 @dataclass(frozen=True)
@@ -20,6 +30,35 @@ class CandidateParameterEstimate:
     pass_duration_plausibility: bool
     parameter_assumptions: str
     parameter_uncertainty_caveats: str
+
+
+def _lookup_tic_density(tic_id: str, timeout_seconds: float = 10.0) -> float | None:
+    """Query TIC catalog for stellar density from mass and radius.
+
+    Returns density in kg/m³ or None on any failure.
+    """
+    if Catalogs is None:
+        LOGGER.warning("astroquery not available; skipping TIC density lookup.")
+        return None
+    try:
+        from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeout
+
+        def _query() -> float | None:
+            result = Catalogs.query_object(tic_id, catalog="TIC")
+            if result is None or len(result) == 0:
+                return None
+            mass = float(result["mass"][0])
+            rad = float(result["rad"][0])
+            if not math.isfinite(mass) or mass <= 0 or not math.isfinite(rad) or rad <= 0:
+                return None
+            return 3.0 * mass * _M_SUN_KG / (4.0 * math.pi * (rad * _R_SUN_M) ** 3)
+
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(_query)
+            return future.result(timeout=timeout_seconds)
+    except Exception as exc:
+        LOGGER.warning("TIC density lookup failed for %s: %s. Using default density.", tic_id, exc)
+        return None
 
 
 def _expected_central_duration_hours(
@@ -48,6 +87,11 @@ def estimate_candidate_parameters(
     stellar_density_kg_m3: float = _DEFAULT_STELLAR_DENSITY_KG_M3,
     duration_ratio_min: float = 0.05,
     duration_ratio_max: float = 1.8,
+    apply_limb_darkening_correction: bool = False,
+    limb_darkening_u1: float = 0.4,
+    limb_darkening_u2: float = 0.2,
+    tic_density_lookup: bool = False,
+    tic_id: str | None = None,
 ) -> dict[int, CandidateParameterEstimate]:
     """Estimate first-pass geometric parameters for BLS candidates.
 
@@ -58,6 +102,15 @@ def estimate_candidate_parameters(
     3) A broad duration-ratio gate flags candidates whose fitted duration is
        inconsistent with that baseline expectation.
     """
+    if tic_density_lookup and tic_id:
+        tic_density = _lookup_tic_density(tic_id)
+        if tic_density is not None:
+            stellar_density_kg_m3 = tic_density
+
+    ld_factor = 1.0
+    if apply_limb_darkening_correction:
+        ld_factor = 1.0 - limb_darkening_u1 / 3.0 - limb_darkening_u2 / 6.0
+
     assumptions = (
         "depth~(Rp/Rs)^2; no flux dilution; solar-like host density "
         f"{stellar_density_kg_m3:.1f} kg/m^3; circular-orbit, central-transit "
@@ -76,7 +129,7 @@ def estimate_candidate_parameters(
             depth = float("nan")
         depth_non_negative = max(0.0, depth) if math.isfinite(depth) else float("nan")
         if math.isfinite(depth_non_negative):
-            radius_ratio = math.sqrt(depth_non_negative)
+            radius_ratio = math.sqrt(depth_non_negative / ld_factor)
             radius_earth = radius_ratio * _R_SUN_IN_R_EARTH
         else:
             radius_ratio = float("nan")

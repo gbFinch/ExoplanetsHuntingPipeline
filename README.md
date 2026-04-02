@@ -57,7 +57,96 @@ Reference: `examples/config-example-full.toml`
 
 - `quicklook`: fast inspection
 - `science-default`: balanced, default workflow
-- `deep-search`: heavier search with optional interactive plotting
+- `deep-search`: heavier search with iterative BLS enabled (3 passes)
+
+## Iterative BLS Planet Search
+
+Exohunt supports iterative BLS transit search for multi-planet detection. After each BLS pass, detected transit epochs are masked and the search repeats on the residual light curve. This recovers secondary planets hidden under the primary signal's sidelobes and harmonics.
+
+### How it works
+
+1. Run BLS → find strongest signal
+2. Mask that signal's transit epochs (set to NaN)
+3. Optionally re-flatten the light curve excluding known transits
+4. Repeat BLS on the residual
+5. Stop when SNR drops below threshold or max iterations reached
+
+### Enable iterative search
+
+Create `configs/iterative.toml`:
+
+```toml
+schema_version = 1
+preset = "science-default"
+
+[bls]
+iterative_masking = true
+iterative_passes = 5
+min_snr = 5.0
+n_periods = 4000
+period_max_days = 25.0
+```
+
+Or use the `deep-search` preset which has iterative BLS enabled by default.
+
+### Systematic planet search workflow
+
+```bash
+# 1. Run batch analysis on high-value targets
+python -m exohunt.cli batch \
+  --targets-file .docs/targets_iterative_search.txt \
+  --config ./configs/iterative.toml \
+  --resume --no-cache
+
+# 2. Collect all passed candidates into one file
+python -m exohunt.collect
+
+# 3. Cross-reference against NASA Exoplanet Archive
+python -m exohunt.crossmatch
+
+# 4. Clean up light curve cache to reclaim disk space (~1MB per target)
+rm -rf outputs/cache/lightcurves
+```
+
+The collect step produces `outputs/candidates_summary.json` with all vetted candidates across every target. The crossmatch step queries the NASA Exoplanet Archive and labels each candidate as:
+
+- **KNOWN** — matches a confirmed exoplanet period
+- **HARMONIC** — matches a harmonic (0.5x, 2x, 3x, etc.) of a known planet
+- **NEW** — no match found in the archive (worth manual review)
+
+Results are saved to `outputs/candidates_crossmatched.json`.
+
+Options:
+
+```bash
+python -m exohunt.collect --iterative-only   # only candidates from iteration >= 1
+python -m exohunt.collect --all              # include failed vetting too
+```
+
+### Target lists
+
+Pre-built target lists are generated from the ExoFOP TOI catalog — single-TOI systems (1 known planet, no eclipsing binaries) sorted by TESS sector count. The iterative BLS masks the known planet and searches for additional signals.
+
+| File | Targets | Criteria | Est. runtime |
+|------|---------|----------|-------------|
+| `.docs/targets_premium.txt` | ~200 | Tmag<11, ≥10 sectors | ~3 hours |
+| `.docs/targets_standard.txt` | ~1,100 | Tmag<13, ≥5 sectors | ~14 hours |
+| `.docs/targets_extended.txt` | ~1,900 | Tmag<14, ≥3 sectors | ~24 hours |
+| `.docs/targets_iterative_search.txt` | ~3,200 | All tiers combined | ~41 hours |
+
+Start with premium, then expand:
+
+```bash
+# Best targets first
+python -m exohunt.cli batch \
+  --targets-file .docs/targets_premium.txt \
+  --config ./configs/iterative.toml --resume --no-cache
+
+# Then add more (--resume skips already-processed targets)
+python -m exohunt.cli batch \
+  --targets-file .docs/targets_iterative_search.txt \
+  --config ./configs/iterative.toml --resume --no-cache
+```
 
 ## CLI Usage
 
@@ -124,20 +213,22 @@ Curated example file:
       "period_days": 1.5669543338043215,
       "depth_ppm": 43.98520228435891,
       "vetting_pass": false,
-      "vetting_reasons": "odd_even_depth_mismatch"
+      "vetting_reasons": "odd_even_depth_mismatch",
+      "iteration": 0
     },
     {
       "rank": 2,
       "period_days": 6.267835516128348,
       "depth_ppm": 179.90382892442165,
       "vetting_pass": true,
-      "vetting_reasons": "pass"
+      "vetting_reasons": "pass",
+      "iteration": 1
     }
   ]
 }
 ```
 
-This demonstrates an important behavior: the strongest-ranked BLS peak is not always the real planet candidate, so vetting fields should drive interpretation.
+This demonstrates an important behavior: the strongest-ranked BLS peak is not always the real planet candidate, so vetting fields should drive interpretation. The `iteration` field indicates which BLS pass found the candidate (0 = first pass, 1+ = found after masking prior signals).
 
 ## Reproducibility
 
