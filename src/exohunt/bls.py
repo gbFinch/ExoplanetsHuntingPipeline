@@ -407,17 +407,28 @@ def run_iterative_bls_search(
             break
 
         iter_lc = lk.LightCurve(time=lc_prepared.time, flux=flux)
-        candidates = run_bls_search(
-            lc_prepared=iter_lc,
-            period_min_days=config.period_min_days,
-            period_max_days=config.period_max_days,
-            duration_min_hours=config.duration_min_hours,
-            duration_max_hours=config.duration_max_hours,
-            n_periods=config.n_periods,
-            n_durations=config.n_durations,
-            top_n=config.top_n,
-            unique_period_separation_fraction=config.unique_period_separation_fraction,
-            min_snr=config.min_snr,
+        if getattr(config, "search_method", "bls") == "tls":
+            from exohunt.tls import run_tls_search
+            candidates = run_tls_search(
+                lc_prepared=iter_lc,
+                period_min_days=config.period_min_days,
+                period_max_days=config.period_max_days,
+                top_n=config.top_n,
+                min_sde=config.min_snr,
+                unique_period_separation_fraction=config.unique_period_separation_fraction,
+            )
+        else:
+            candidates = run_bls_search(
+                lc_prepared=iter_lc,
+                period_min_days=config.period_min_days,
+                period_max_days=config.period_max_days,
+                duration_min_hours=config.duration_min_hours,
+                duration_max_hours=config.duration_max_hours,
+                n_periods=config.n_periods,
+                n_durations=config.n_durations,
+                top_n=config.top_n,
+                unique_period_separation_fraction=config.unique_period_separation_fraction,
+                min_snr=config.min_snr,
             normalized=normalized,
         )
         # Take only the top iterative_top_n for subtraction

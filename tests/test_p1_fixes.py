@@ -88,18 +88,22 @@ def _make_synthetic_lc(
 
 class TestR8AliasRatios:
     # TC-U-01 | Covers: FR-6, AC-3
-    def test_r8_alias_two_thirds_flagged(self):
+    def test_r8_alias_two_thirds_not_flagged(self):
+        """2/3 ratio is NOT a periodogram alias — it indicates a real resonant
+        planet (e.g. 3:2 mean-motion resonance), not a harmonic artifact."""
         a = _make_candidate(rank=1, period_days=3.0, power=100.0)
         b = _make_candidate(rank=2, period_days=2.0, power=50.0)
         result = _alias_harmonic_reference_rank(index=1, candidates=[a, b], tolerance_fraction=0.02)
-        assert result == 1, "Candidate at 2/3 period ratio should be flagged as alias"
+        assert result == -1, "2/3 ratio should not be flagged (resonant planets)"
 
     # TC-U-02 | Covers: FR-6
-    def test_r8_alias_three_halves_flagged(self):
+    def test_r8_alias_three_halves_not_flagged(self):
+        """3/2 ratio is NOT a periodogram alias — it indicates a real resonant
+        planet (e.g. 3:2 mean-motion resonance), not a harmonic artifact."""
         a = _make_candidate(rank=1, period_days=2.0, power=100.0)
         b = _make_candidate(rank=2, period_days=3.0, power=50.0)
         result = _alias_harmonic_reference_rank(index=1, candidates=[a, b], tolerance_fraction=0.02)
-        assert result == 1, "Candidate at 3/2 period ratio should be flagged as alias"
+        assert result == -1, "3/2 ratio should not be flagged (resonant planets)"
 
 
 # ===========================================================================
@@ -415,5 +419,5 @@ class TestNFR:
         with pyproject.open("rb") as f:
             data = tomllib.load(f)
         deps = set(data["project"]["dependencies"])
-        expected = {"numpy", "matplotlib", "astropy", "lightkurve", "pandas"}
+        expected = {"numpy", "matplotlib", "astropy", "lightkurve", "pandas", "transitleastsquares"}
         assert deps == expected, f"Unexpected dependencies: {deps - expected}"

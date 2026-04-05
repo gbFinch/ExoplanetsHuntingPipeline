@@ -26,6 +26,7 @@ smoothing_window = 5
 [bls]
 enabled = true
 mode = "stitched"
+search_method = "tls"
 period_min_days = 0.5
 period_max_days = 20.0
 duration_min_hours = 0.5

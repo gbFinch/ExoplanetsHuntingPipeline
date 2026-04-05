@@ -59,6 +59,7 @@ class PlotConfig:
 class BLSConfig:
     enabled: bool
     mode: str
+    search_method: str  # "bls" or "tls"
     period_min_days: float
     period_max_days: float
     duration_min_hours: float
@@ -138,6 +139,7 @@ _DEFAULTS: dict[str, Any] = {
     "bls": {
         "enabled": True,
         "mode": "stitched",
+        "search_method": "bls",
         "period_min_days": 0.5,
         "period_max_days": 20.0,
         "duration_min_hours": 0.5,
@@ -509,6 +511,7 @@ def resolve_runtime_config(
     bls = BLSConfig(
         enabled=_expect_bool(bls_data, "enabled", scope="bls"),
         mode=_normalize_mode(bls_data["mode"], key_path="bls.mode"),
+        search_method=str(bls_data.get("search_method", "bls")),
         period_min_days=_expect_float(bls_data, "period_min_days", scope="bls"),
         period_max_days=_expect_float(bls_data, "period_max_days", scope="bls"),
         duration_min_hours=_expect_float(bls_data, "duration_min_hours", scope="bls"),

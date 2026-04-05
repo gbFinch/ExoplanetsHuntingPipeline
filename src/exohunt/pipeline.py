@@ -648,6 +648,7 @@ def run_batch_analysis(
     bls_n_durations: int = 12,
     bls_top_n: int = 5,
     bls_mode: str = "stitched",
+    bls_search_method: str = "bls",
     bls_min_snr: float = 7.0,
     config_schema_version: int = 1,
     config_preset_id: str | None = None,
@@ -700,51 +701,54 @@ def run_batch_analysis(
             continue
 
         target_started = perf_counter()
+        max_retries = 3
         try:
-            output_path = fetch_and_plot(
-                target=target,
-                cache_dir=cache_dir,
-                refresh_cache=refresh_cache,
-                outlier_sigma=outlier_sigma,
-                flatten_window_length=flatten_window_length,
-                max_download_files=max_download_files,
-                preprocess_enabled=preprocess_enabled,
-                no_flatten=no_flatten,
-                preprocess_mode=preprocess_mode,
-                authors=authors,
-                interactive_html=interactive_html,
-                interactive_max_points=interactive_max_points,
-                plot_enabled=plot_enabled,
-                plot_mode=plot_mode,
-                run_bls=run_bls,
-                bls_period_min_days=bls_period_min_days,
-                bls_period_max_days=bls_period_max_days,
-                bls_duration_min_hours=bls_duration_min_hours,
-                bls_duration_max_hours=bls_duration_max_hours,
-                bls_n_periods=bls_n_periods,
-                bls_n_durations=bls_n_durations,
-                bls_top_n=bls_top_n,
-                bls_mode=bls_mode,
-                bls_min_snr=bls_min_snr,
-                config_schema_version=config_schema_version,
-                config_preset_id=config_preset_id,
-                config_preset_version=config_preset_version,
-                config_preset_hash=config_preset_hash,
-                no_cache=no_cache,
-            )
-            completed.add(target)
-            failed.discard(target)
-            errors.pop(target, None)
-            statuses.append(
-                BatchTargetStatus(
-                    run_utc=run_utc,
-                    target=target,
-                    status="success",
-                    error="",
-                    runtime_seconds=float(perf_counter() - target_started),
-                    output_path=str(output_path) if output_path is not None else "",
-                )
-            )
+            for attempt in range(max_retries + 1):
+                try:
+                    output_path = fetch_and_plot(
+                        target=target,
+                        cache_dir=cache_dir,
+                        refresh_cache=refresh_cache,
+                        outlier_sigma=outlier_sigma,
+                        flatten_window_length=flatten_window_length,
+                        max_download_files=max_download_files,
+                        preprocess_enabled=preprocess_enabled,
+                        no_flatten=no_flatten,
+                        preprocess_mode=preprocess_mode,
+                        authors=authors,
+                        interactive_html=interactive_html,
+                        interactive_max_points=interactive_max_points,
+                        plot_enabled=plot_enabled,
+                        plot_mode=plot_mode,
+                        run_bls=run_bls,
+                        bls_period_min_days=bls_period_min_days,
+                        bls_period_max_days=bls_period_max_days,
+                        bls_duration_min_hours=bls_duration_min_hours,
+                        bls_duration_max_hours=bls_duration_max_hours,
+                        bls_n_periods=bls_n_periods,
+                        bls_n_durations=bls_n_durations,
+                        bls_top_n=bls_top_n,
+                        bls_mode=bls_mode,
+                        bls_search_method=bls_search_method,
+                        bls_min_snr=bls_min_snr,
+                        config_schema_version=config_schema_version,
+                        config_preset_id=config_preset_id,
+                        config_preset_version=config_preset_version,
+                        config_preset_hash=config_preset_hash,
+                        no_cache=no_cache,
+                    )
+                    break  # success
+                except (OSError, ConnectionError, TimeoutError) as net_exc:
+                    if attempt < max_retries:
+                        wait = 30 * (2 ** attempt)
+                        LOGGER.warning(
+                            "Network error on %s (attempt %d/%d), retrying in %ds: %s",
+                            target, attempt + 1, max_retries, wait, net_exc,
+                        )
+                        import time as _time
+                        _time.sleep(wait)
+                    else:
+                        raise
         except Exception as exc:
             failed.add(target)
             errors[target] = str(exc)
@@ -759,6 +763,20 @@ def run_batch_analysis(
                 )
             )
             LOGGER.exception("Batch target failed: %s (%s)", target, exc)
+        else:
+            completed.add(target)
+            failed.discard(target)
+            errors.pop(target, None)
+            statuses.append(
+                BatchTargetStatus(
+                    run_utc=run_utc,
+                    target=target,
+                    status="success",
+                    error="",
+                    runtime_seconds=float(perf_counter() - target_started),
+                    output_path=str(output_path) if output_path is not None else "",
+                )
+            )
         finally:
             state_payload["completed_targets"] = sorted(completed)
             state_payload["failed_targets"] = sorted(failed)
@@ -1113,6 +1131,7 @@ def _search_and_output_stage(
     bls_n_durations: int,
     bls_top_n: int,
     bls_mode: str,
+    bls_search_method: str,
     bls_min_snr: float,
     vetting_min_transit_count: int,
     vetting_odd_even_max_mismatch_fraction: float,
@@ -1301,6 +1320,7 @@ def _search_and_output_stage(
 
                 iter_bls_cfg = BLSConfig(
                     enabled=True, mode=bls_mode,
+                    search_method=bls_search_method,
                     period_min_days=bls_period_min_days,
                     period_max_days=bls_period_max_days,
                     duration_min_hours=bls_duration_min_hours,
@@ -1330,18 +1350,29 @@ def _search_and_output_stage(
                     lc=lc_prepared if preprocess_iterative_flatten else None,
                 )
             else:
-                bls_candidates = run_bls_search(
-                    lc_prepared=lc_prepared,
-                    period_min_days=bls_period_min_days,
-                    period_max_days=bls_period_max_days,
-                    duration_min_hours=bls_duration_min_hours,
-                    duration_max_hours=bls_duration_max_hours,
-                    n_periods=bls_n_periods,
-                    n_durations=bls_n_durations,
-                    top_n=bls_top_n,
-                    min_snr=bls_min_snr,
-                    unique_period_separation_fraction=bls_unique_period_separation_fraction,
-                )
+                if bls_search_method == "tls":
+                    from exohunt.tls import run_tls_search
+                    bls_candidates = run_tls_search(
+                        lc_prepared=lc_prepared,
+                        period_min_days=bls_period_min_days,
+                        period_max_days=bls_period_max_days,
+                        top_n=bls_top_n,
+                        min_sde=bls_min_snr,
+                        unique_period_separation_fraction=bls_unique_period_separation_fraction,
+                    )
+                else:
+                    bls_candidates = run_bls_search(
+                        lc_prepared=lc_prepared,
+                        period_min_days=bls_period_min_days,
+                        period_max_days=bls_period_max_days,
+                        duration_min_hours=bls_duration_min_hours,
+                        duration_max_hours=bls_duration_max_hours,
+                        n_periods=bls_n_periods,
+                        n_durations=bls_n_durations,
+                        top_n=bls_top_n,
+                        min_snr=bls_min_snr,
+                        unique_period_separation_fraction=bls_unique_period_separation_fraction,
+                    )
             if bls_candidates:
                 refined_candidates = refine_bls_candidates(
                     lc_prepared=lc_prepared,
@@ -1874,6 +1905,7 @@ def fetch_and_plot(
     bls_mode: str = "stitched",
     bls_min_snr: float = 7.0,
     bls_compute_fap: bool = False,
+    bls_search_method: str = "bls",
     bls_fap_iterations: int = 1000,
     bls_iterative_masking: bool = False,
     bls_iterative_passes: int = 1,
@@ -1987,7 +2019,8 @@ def fetch_and_plot(
         bls_duration_min_hours=bls_duration_min_hours,
         bls_duration_max_hours=bls_duration_max_hours,
         bls_n_periods=bls_n_periods, bls_n_durations=bls_n_durations,
-        bls_top_n=bls_top_n, bls_mode=bls_mode, bls_min_snr=bls_min_snr,
+        bls_top_n=bls_top_n, bls_mode=bls_mode, bls_search_method=bls_search_method,
+        bls_min_snr=bls_min_snr,
         vetting_min_transit_count=vetting_min_transit_count,
         vetting_odd_even_max_mismatch_fraction=vetting_odd_even_max_mismatch_fraction,
         vetting_alias_tolerance_fraction=vetting_alias_tolerance_fraction,

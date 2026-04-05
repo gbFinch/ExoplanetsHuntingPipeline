@@ -12,6 +12,7 @@ dependencies = [
   "astropy",
   "lightkurve",
   "pandas",
+  "transitleastsquares",
 ]
 
 [project.optional-dependencies]

@@ -60,7 +60,7 @@ def _alias_harmonic_reference_rank(
     if not candidates:
         return -1
     current = candidates[index]
-    ratios = (0.5, 2.0, 1.0 / 3.0, 3.0, 2.0 / 3.0, 3.0 / 2.0)
+    ratios = (0.5, 2.0, 1.0 / 3.0, 3.0, 0.25, 4.0, 0.2, 5.0)
     for j, other in enumerate(candidates):
         if j == index:
             continue
