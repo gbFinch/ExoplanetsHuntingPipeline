@@ -1,0 +1,11 @@
+schema_version = 1
+preset = "science-default"
+
+[bls]
+search_method = "tls"
+iterative_masking = true
+iterative_passes = 5
+period_max_days = 25.0
+
+[parameters]
+tic_density_lookup = true
