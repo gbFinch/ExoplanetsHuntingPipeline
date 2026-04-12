@@ -48,6 +48,7 @@ def run_tls_search(
     min_sde: float = 7.0,
     bin_minutes: float = 10.0,
     unique_period_separation_fraction: float = 0.05,
+    stellar_params: "StellarParams | None" = None,
 ) -> list[BLSCandidate]:
     """Run TLS once, extract top N unique peaks from the SDE periodogram.
 
@@ -81,12 +82,25 @@ def run_tls_search(
 
     # Single full TLS run
     model = transitleastsquares(time_b, flux_b)
+    stellar_kw: dict = {}
+    if stellar_params is not None and not stellar_params.used_defaults:
+        stellar_kw = dict(
+            R_star=stellar_params.R_star,
+            R_star_min=stellar_params.R_star_min,
+            R_star_max=stellar_params.R_star_max,
+            M_star=stellar_params.M_star,
+            M_star_min=stellar_params.M_star_min,
+            M_star_max=stellar_params.M_star_max,
+            u=list(stellar_params.limb_darkening),
+        )
+        LOGGER.info("TLS: using stellar params R=%.3f M=%.3f", stellar_params.R_star, stellar_params.M_star)
     results = model.power(
         period_min=period_min_days,
         period_max=p_max,
         n_transits_min=2,
         show_progress_bar=False,
         use_threads=1,
+        **stellar_kw,
     )
 
     sde = np.asarray(results.power, dtype=float)
@@ -125,6 +139,7 @@ def run_tls_search(
             r = narrow.power(
                 period_min=p * 0.99, period_max=p * 1.01,
                 n_transits_min=2, show_progress_bar=False, use_threads=1,
+                **stellar_kw,
             )
 
         depth_frac = 1.0 - float(r.depth)

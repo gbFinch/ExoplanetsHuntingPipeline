@@ -1162,6 +1162,14 @@ def _search_and_output_stage(
     diagnostic_assets: list[tuple[Path, Path]] = []
     stitched_vetting_by_rank: dict[int, CandidateVettingResult] = {}
     run_utc = datetime.now(tz=timezone.utc).isoformat()
+
+    # Query stellar parameters for TLS
+    stellar_params = None
+    if bls_search_method == "tls":
+        from exohunt.stellar import query_stellar_params
+        tic_num = int(target.replace("TIC ", "").strip())
+        stellar_params = query_stellar_params(tic_num)
+
     if run_bls:
         LOGGER.info("Step 5/7: running BLS transit search")
         step_started = perf_counter()
@@ -1348,6 +1356,7 @@ def _search_and_output_stage(
                     config=iter_bls_cfg,
                     preprocess_config=iter_pp_cfg,
                     lc=lc_prepared if preprocess_iterative_flatten else None,
+                    stellar_params=stellar_params,
                 )
             else:
                 if bls_search_method == "tls":
@@ -1359,6 +1368,7 @@ def _search_and_output_stage(
                         top_n=bls_top_n,
                         min_sde=bls_min_snr,
                         unique_period_separation_fraction=bls_unique_period_separation_fraction,
+                        stellar_params=stellar_params,
                     )
                 else:
                     bls_candidates = run_bls_search(

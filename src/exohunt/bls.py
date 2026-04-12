@@ -384,6 +384,7 @@ def run_iterative_bls_search(
     normalized: bool = True,
     preprocess_config: "PreprocessConfig | None" = None,  # noqa: F821
     lc: lk.LightCurve | None = None,
+    stellar_params: "StellarParams | None" = None,
 ) -> list[BLSCandidate]:
     """Run iterative BLS with transit masking between passes.
 
@@ -416,6 +417,7 @@ def run_iterative_bls_search(
                 top_n=config.top_n,
                 min_sde=config.min_snr,
                 unique_period_separation_fraction=config.unique_period_separation_fraction,
+                stellar_params=stellar_params,
             )
         else:
             candidates = run_bls_search(
