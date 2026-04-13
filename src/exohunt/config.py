@@ -165,6 +165,8 @@ _DEFAULTS: dict[str, Any] = {
         "alias_tolerance_fraction": 0.02,
         "secondary_eclipse_max_fraction": 0.30,
         "depth_consistency_max_fraction": 0.50,
+        "triceratops_enabled": False,
+        "triceratops_n": 100_000,
     },
     "parameters": {
         "stellar_density_kg_m3": 1408.0,

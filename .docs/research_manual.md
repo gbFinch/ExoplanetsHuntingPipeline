@@ -23,10 +23,10 @@ Pre-built target lists are in `.docs/`. Start small, expand later:
 
 | File | Targets | Est. runtime |
 |------|:-------:|:------------:|
-| `.docs/targets_premium.txt` | ~200 | ~3 hours |
-| `.docs/targets_standard.txt` | ~1,100 | ~14 hours |
-| `.docs/targets_extended.txt` | ~1,900 | ~24 hours |
-| `.docs/targets_iterative_search.txt` | ~3,200 | ~41 hours |
+| `.docs/targets_premium.txt` | ~200 | ~40 hours |
+| `.docs/targets_standard.txt` | ~1,100 | ~9 days |
+| `.docs/targets_extended.txt` | ~1,900 | ~16 days |
+| `.docs/targets_iterative_search.txt` | ~3,200 | ~27 days |
 
 Or create your own (one TIC ID per line, `#` comments allowed):
 
@@ -36,38 +36,37 @@ TIC 261136679
 TIC 355867695
 ```
 
-### Create a search config
+### Choose a search config
+
+Use the built-in `iterative-search` preset — it's configured for systematic planet hunting:
+
+```
+iterative-search:
+  TLS search with stellar parameters from TIC
+  Iterative masking (3 passes) to find multiple planets
+  Batman subtraction of known confirmed planets
+  NaN masking of TOI candidates
+  Period range 0.5–25 days
+  TRICERATOPS disabled (run separately on candidates)
+  ~12 min per target (varies with sector count)
+```
+
+No config file needed — just pass the preset name directly:
 
 ```bash
-python -m exohunt.cli init-config --from deep-search --out ./configs/my_search.toml
+python -m exohunt.cli batch \
+  --targets-file .docs/targets_premium.txt \
+  --config iterative-search \
+  --resume --no-cache
 ```
 
-Recommended settings for a multi-day search:
+To customize, export and edit:
 
-```toml
-schema_version = 1
-preset = "deep-search"
-
-[bls]
-search_method = "tls"
-iterative_masking = true
-iterative_passes = 3
-period_max_days = 25.0
-n_periods = 4000
-min_snr = 7.0
-
-[parameters]
-tic_density_lookup = true
-
-[vetting]
-triceratops_enabled = false    # skip during batch, run later
+```bash
+python -m exohunt.cli init-config --from iterative-search --out ./configs/my_search.toml
+# Edit configs/my_search.toml, then:
+python -m exohunt.cli batch --targets-file targets.txt --config ./configs/my_search.toml --resume
 ```
-
-Key choices:
-- `iterative_passes = 3` — enough to find 2nd/3rd planets, avoids wasting time on noise
-- `period_max_days = 25.0` — covers most short-period planets; increase to 40 for longer periods (doubles runtime)
-- `triceratops_enabled = false` — TRICERATOPS is slow and not needed for detection; run it later on candidates
-- `tic_density_lookup = true` — uses real stellar parameters from TIC for better TLS sensitivity
 
 ### What the pipeline does for each target
 
@@ -90,7 +89,7 @@ Key choices:
 ```bash
 python -m exohunt.cli batch \
   --targets-file .docs/targets_premium.txt \
-  --config ./configs/my_search.toml \
+  --config iterative-search \
   --resume --no-cache \
   > outputs/search_run.log 2>&1 &
 ```
@@ -104,7 +103,7 @@ On macOS, prevent sleep:
 ```bash
 nohup caffeinate -dims python -m exohunt.cli batch \
   --targets-file .docs/targets_premium.txt \
-  --config ./configs/my_search.toml \
+  --config iterative-search \
   --resume --no-cache \
   > outputs/search_run.log 2>&1 &
 echo "PID: $!"
@@ -117,7 +116,7 @@ After the premium tier finishes, expand with `--resume` (skips already-done targ
 ```bash
 python -m exohunt.cli batch \
   --targets-file .docs/targets_iterative_search.txt \
-  --config ./configs/my_search.toml \
+  --config iterative-search \
   --resume --no-cache \
   > outputs/search_run_full.log 2>&1 &
 ```
@@ -317,7 +316,8 @@ outputs/
 |--------|----------|:----:|:----------:|:------------:|
 | `quicklook` | Fast inspection | No (BLS) | No | 0.5–20d |
 | `science-default` | Balanced analysis | Yes | No | 0.5–20d |
-| `deep-search` | Full search | Yes | Yes (3 passes) | 0.5–40d |
+| `iterative-search` | **Batch planet hunting** | Yes | Yes (3 passes) | 0.5–25d |
+| `deep-search` | Maximum sensitivity | Yes | Yes (3 passes) | 0.5–40d |
 
 ---
 

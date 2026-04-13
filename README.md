@@ -129,10 +129,10 @@ Pre-built target lists are generated from the ExoFOP TOI catalog — single-TOI 
 
 | File | Targets | Criteria | Est. runtime |
 |------|---------|----------|-------------|
-| `.docs/targets_premium.txt` | ~200 | Tmag<11, ≥10 sectors | ~3 hours |
-| `.docs/targets_standard.txt` | ~1,100 | Tmag<13, ≥5 sectors | ~14 hours |
-| `.docs/targets_extended.txt` | ~1,900 | Tmag<14, ≥3 sectors | ~24 hours |
-| `.docs/targets_iterative_search.txt` | ~3,200 | All tiers combined | ~41 hours |
+| `.docs/targets_premium.txt` | ~200 | Tmag<11, ≥10 sectors | ~40 hours |
+| `.docs/targets_standard.txt` | ~1,100 | Tmag<13, ≥5 sectors | ~9 days |
+| `.docs/targets_extended.txt` | ~1,900 | Tmag<14, ≥3 sectors | ~16 days |
+| `.docs/targets_iterative_search.txt` | ~3,200 | All tiers combined | ~27 days |
 
 Start with premium, then expand:
 

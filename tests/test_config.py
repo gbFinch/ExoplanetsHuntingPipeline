@@ -124,7 +124,7 @@ def test_resolve_runtime_config_reports_removed_cache_dir(tmp_path: Path):
 
 
 def test_builtin_presets_available():
-    assert set(list_builtin_presets()) == {"deep-search", "quicklook", "science-default"}
+    assert set(list_builtin_presets()) == {"deep-search", "iterative-search", "quicklook", "science-default"}
 
 
 def test_resolve_runtime_config_with_builtin_preset():
