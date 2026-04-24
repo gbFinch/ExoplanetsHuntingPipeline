@@ -466,14 +466,14 @@ def _empirical_depth_ppm(
 ) -> float:
     """Return in-transit minus out-of-transit median flux in ppm.
 
-    In-transit window: |phase| < D/4. OOT window: D < |phase| < 3D. Returns
-    NaN if either side has no samples.
+    Windows match the vetting module: in-transit |phase| <= D/2, OOT
+    D <= |phase| <= 3D. Returns NaN if either side has no samples.
     """
     if len(phase_hours) == 0 or not np.isfinite(duration_hours) or duration_hours <= 0:
         return float("nan")
     abs_ph = np.abs(phase_hours)
-    in_mask = abs_ph < (duration_hours / 4.0)
-    oot_mask = (abs_ph > duration_hours) & (abs_ph < 3.0 * duration_hours)
+    in_mask = abs_ph <= (duration_hours / 2.0)
+    oot_mask = (abs_ph >= duration_hours) & (abs_ph <= 3.0 * duration_hours)
     if not np.any(in_mask) or not np.any(oot_mask):
         return float("nan")
     return float(np.nanmedian(flux_ppm[in_mask]) - np.nanmedian(flux_ppm[oot_mask]))
