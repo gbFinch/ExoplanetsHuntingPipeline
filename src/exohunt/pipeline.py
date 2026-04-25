@@ -373,6 +373,7 @@ def _search_and_output_stage(
     time_max: float,
     authors: str | None,
     tpf: object | None = None,
+    preset_meta: PresetMeta | None = None,
     run_dir: Path,
 ) -> SearchResult:
     """Run BLS search, vetting, parameter estimation, and write candidates."""
@@ -420,6 +421,7 @@ def _search_and_output_stage(
     candidate_json_paths: list[Path] = []
     diagnostic_assets: list[tuple[Path, Path]] = []
     stitched_vetting_by_rank: dict[int, CandidateVettingResult] = {}
+    parameter_estimates_by_rank: dict[int, CandidateParameterEstimate] = {}
     run_utc = datetime.now(tz=timezone.utc).isoformat()
 
     # Query stellar parameters for TLS
@@ -765,6 +767,17 @@ def _search_and_output_stage(
             "parameter_duration_ratio_min": float(parameter_duration_ratio_min),
             "parameter_duration_ratio_max": float(parameter_duration_ratio_max),
         }
+        parameter_estimates_by_rank = estimate_candidate_parameters(
+            candidates=bls_candidates,
+            stellar_density_kg_m3=parameter_stellar_density_kg_m3,
+            duration_ratio_min=parameter_duration_ratio_min,
+            duration_ratio_max=parameter_duration_ratio_max,
+            apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
+            limb_darkening_u1=parameter_limb_darkening_u1,
+            limb_darkening_u2=parameter_limb_darkening_u2,
+            tic_density_lookup=parameter_tic_density_lookup,
+            tic_id=str(parse_tic_id(target)) if parameter_tic_density_lookup else None,
+        )
         candidate_csv_path, candidate_json_path = _write_bls_candidates(
             target=target,
             output_key=candidate_output_key,
@@ -772,17 +785,7 @@ def _search_and_output_stage(
             candidates=bls_candidates,
             run_dir=run_dir,
             vetting_by_rank=stitched_vetting_by_rank,
-            parameter_estimates_by_rank=estimate_candidate_parameters(
-                candidates=bls_candidates,
-                stellar_density_kg_m3=parameter_stellar_density_kg_m3,
-                duration_ratio_min=parameter_duration_ratio_min,
-                duration_ratio_max=parameter_duration_ratio_max,
-                apply_limb_darkening_correction=parameter_apply_limb_darkening_correction,
-                limb_darkening_u1=parameter_limb_darkening_u1,
-                limb_darkening_u2=parameter_limb_darkening_u2,
-                tic_density_lookup=parameter_tic_density_lookup,
-                tic_id=str(parse_tic_id(target)) if parameter_tic_density_lookup else None,
-            ),
+            parameter_estimates_by_rank=parameter_estimates_by_rank,
         )
         candidate_csv_paths.append(candidate_csv_path)
         candidate_json_paths.append(candidate_json_path)
@@ -903,6 +906,32 @@ def _search_and_output_stage(
     # Append passing candidates to live summary CSVs
     if bls_candidates and stitched_vetting_by_rank:
         _append_live_candidates(target, bls_candidates, stitched_vetting_by_rank, known, run_dir=run_dir)
+
+    # Best-effort: write human-readable summary.md for this target
+    try:
+        from exohunt.manifest import write_target_summary
+        write_target_summary(
+            target=target,
+            run_dir=run_dir,
+            run_id=run_dir.name,
+            preset_meta=preset_meta,
+            config=config,
+            n_points_raw=n_points_raw,
+            n_points_prepared=n_points_prepared,
+            time_min_btjd=time_min,
+            time_max_btjd=time_max,
+            stellar_params=stellar_params,
+            known_ephemerides=known,
+            bls_candidates=bls_candidates,
+            vetting_by_rank=stitched_vetting_by_rank,
+            parameter_estimates_by_rank=parameter_estimates_by_rank,
+            candidate_csv_paths=candidate_csv_paths,
+            diagnostic_assets=diagnostic_assets,
+            plot_paths=[],
+            manifest_path=None,
+        )
+    except Exception as exc:
+        LOGGER.warning('Failed to write target summary for %s: %s', target, exc)
 
     return SearchResult(
         bls_candidates=bls_candidates,
@@ -1336,6 +1365,7 @@ def fetch_and_plot(
         n_points_prepared=n_points_prepared, time_min=time_min, time_max=time_max,
         authors=authors,
         tpf=ingest.tpf,
+        preset_meta=preset_meta,
         run_dir=run_dir,
     )
 

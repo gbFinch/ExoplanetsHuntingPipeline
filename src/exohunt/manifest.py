@@ -202,3 +202,177 @@ def write_run_readme(
     except Exception as exc:
         _README_LOGGER.warning("Failed to write run README: %s", exc)
         return run_dir / "README.md"
+
+
+def write_target_summary(
+    *,
+    target: str,
+    run_dir: Path,
+    run_id: str,
+    preset_meta: object | None = None,
+    config: object | None = None,
+    runtime_seconds: float | None = None,
+    n_points_raw: int,
+    n_points_prepared: int,
+    time_min_btjd: float,
+    time_max_btjd: float,
+    stellar_params: object | None = None,
+    known_ephemerides: list | None = None,
+    bls_candidates: list | None = None,
+    vetting_by_rank: dict | None = None,
+    parameter_estimates_by_rank: dict | None = None,
+    candidate_csv_paths: list | None = None,
+    diagnostic_assets: list | None = None,
+    plot_paths: list | None = None,
+    manifest_path: Path | None = None,
+) -> Path:
+    """Write a human-readable summary.md at <run_dir>/<target-slug>/summary.md."""
+    from exohunt.cache import _target_output_dir
+
+    known_ephemerides = known_ephemerides or []
+    bls_candidates = bls_candidates or []
+    vetting_by_rank = vetting_by_rank or {}
+    parameter_estimates_by_rank = parameter_estimates_by_rank or {}
+    candidate_csv_paths = candidate_csv_paths or []
+    diagnostic_assets = diagnostic_assets or []
+    plot_paths = plot_paths or []
+
+    lines: list[str] = [f"# Run summary: {target}", ""]
+
+    # Section 1: Run metadata
+    lines.append(f"- **Run:** {run_id}")
+    if preset_meta is not None and getattr(preset_meta, "is_set", False):
+        lines.append(
+            f"- **Preset:** `{preset_meta.name}` "
+            f"(version={preset_meta.version}, hash=`{preset_meta.hash}`)"
+        )
+    else:
+        lines.append("- **Preset:** custom (no preset)")
+    if runtime_seconds is not None:
+        lines.append(f"- **Runtime:** {runtime_seconds:.1f}s")
+    lines.append(
+        f"- **Data:** {n_points_raw} → {n_points_prepared} cadences "
+        f"(BTJD {time_min_btjd:.2f} → {time_max_btjd:.2f})"
+    )
+    lines.append("")
+
+    # Section 2: Stellar parameters
+    lines.append("## Stellar parameters")
+    lines.append("")
+    if stellar_params is None or getattr(stellar_params, "used_defaults", True):
+        lines.append("Solar defaults used.")
+    else:
+        sp = stellar_params
+        lines.append(f"- **R_star:** {sp.R_star:.3f} [{sp.R_star_min:.3f}, {sp.R_star_max:.3f}] R☉")
+        lines.append(f"- **M_star:** {sp.M_star:.3f} [{sp.M_star_min:.3f}, {sp.M_star_max:.3f}] M☉")
+        lines.append(f"- **Limb darkening (u1, u2):** ({sp.limb_darkening[0]:.4f}, {sp.limb_darkening[1]:.4f})")
+    lines.append("")
+
+    # Section 3: Known planets/TOIs
+    lines.append("## Known planets / TOIs")
+    lines.append("")
+    if not known_ephemerides:
+        lines.append("No known planets or TOI candidates in NASA Exoplanet Archive.")
+    else:
+        for eph in known_ephemerides:
+            lines.append(f"- **{eph.name}** — P = {eph.period_days:.4f} d")
+    lines.append("")
+
+    # Section 4: Search results grouped by iteration
+    if bls_candidates:
+        lines.append("## Search results")
+        lines.append("")
+        # Group by iteration
+        iters: dict[int, list] = {}
+        for c in bls_candidates:
+            iters.setdefault(c.iteration, []).append(c)
+        # Top-power candidate per iteration (for masked text)
+        top_by_iter: dict[int, object] = {}
+        for it, cands in iters.items():
+            top_by_iter[it] = max(cands, key=lambda x: x.power)
+
+        for iter_n in sorted(iters):
+            cands = iters[iter_n]
+            lines.append(f"### Iteration {iter_n}")
+            # Masked text
+            if iter_n == 0:
+                if known_ephemerides:
+                    masked_parts = [f"{e.name} (P={e.period_days:.4f} d)" for e in known_ephemerides]
+                    lines.append(f"Masked: {', '.join(masked_parts)}")
+                else:
+                    lines.append("Masked: none")
+            else:
+                prior_parts = []
+                for prev_it in sorted(iters):
+                    if prev_it >= iter_n:
+                        break
+                    top = top_by_iter[prev_it]
+                    prior_parts.append(f"P = {top.period_days:.4f} d")
+                lines.append(f"Masked: known planets + prior iterations (top candidates at {', '.join(prior_parts)})")
+            lines.append(f"Candidates found: {len(cands)}")
+            for c in cands:
+                bullet = f"- rank {c.rank}: P = {c.period_days:.4f} d, depth = {c.depth_ppm:.1f} ppm, SNR = {c.snr:.1f}"
+                vr = vetting_by_rank.get(c.rank)
+                if vr is not None:
+                    if vr.vetting_pass:
+                        if vr.vetting_reasons == "pass":
+                            bullet += " — **PASS**"
+                        else:
+                            bullet += f" — PASS ({vr.vetting_reasons})"
+                    else:
+                        bullet += f" — FAIL ({vr.vetting_reasons})"
+                lines.append(bullet)
+            lines.append("")
+    else:
+        lines.append("## Search results")
+        lines.append("")
+        lines.append("No BLS candidates found.")
+        lines.append("")
+
+    # Section 5: Passing candidates with physical parameters
+    passing = [
+        c for c in bls_candidates
+        if vetting_by_rank.get(c.rank) and vetting_by_rank[c.rank].vetting_pass
+    ]
+    if passing:
+        lines.append("## Passing candidates with physical parameters")
+        lines.append("")
+        for c in passing:
+            lines.append(f"### rank {c.rank} (P = {c.period_days:.4f} d) — iteration {c.iteration}")
+            lines.append(f"- Depth: {c.depth_ppm:.1f} ppm")
+            lines.append(f"- Duration: {c.duration_hours:.1f} h")
+            lines.append(f"- Transit time (BTJD): {c.transit_time:.1f}")
+            lines.append(f"- Transit count estimate: {c.transit_count_estimate:.0f}")
+            pe = parameter_estimates_by_rank.get(c.rank)
+            if pe is not None:
+                lines.append(f"- Rp/Rs: {pe.radius_ratio_rp_over_rs:.4f}")
+                lines.append(f"- Rp: {pe.radius_earth_radii_solar_assumption:.3f} R⊕")
+                lines.append(f"- Expected duration (central, solar density): {pe.duration_expected_hours_central_solar_density:.2f} h")
+                lines.append(f"- Observed/expected duration ratio: {pe.duration_ratio_observed_to_expected:.2f}")
+                lines.append(f"- Duration plausibility: {'pass' if pe.pass_duration_plausibility else 'fail'}")
+            lines.append("")
+
+    # Section 6: Artifacts
+    lines.append("## Artifacts")
+    lines.append("")
+
+    def _rel(p: Path) -> str:
+        try:
+            return str(p.relative_to(run_dir))
+        except ValueError:
+            return str(p)
+
+    if candidate_csv_paths:
+        lines.append(f"- Candidates: {', '.join(f'`{_rel(p)}`' for p in candidate_csv_paths)}")
+    if diagnostic_assets:
+        lines.append(f"- Diagnostic asset pairs: {len(diagnostic_assets)}")
+    if plot_paths:
+        lines.append(f"- Plots: {', '.join(f'`{_rel(p)}`' for p in plot_paths)}")
+    if manifest_path is not None:
+        lines.append(f"- Manifest: `{_rel(manifest_path)}`")
+    lines.append("")
+
+    summary_path = _target_output_dir(target, outputs_root=run_dir) / "summary.md"
+    summary_path.parent.mkdir(parents=True, exist_ok=True)
+    summary_path.write_text("\n".join(lines), encoding="utf-8")
+    return summary_path

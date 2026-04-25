@@ -3,6 +3,8 @@ from __future__ import annotations
 import csv
 import json
 import logging
+import os
+import statistics
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -81,6 +83,114 @@ def _write_batch_status_report(
     return status_path, json_path
 
 
+_PROGRESS_ROLLING_WINDOW = 10
+
+
+def _format_duration(seconds: float | None) -> str:
+    if seconds is None or not (seconds >= 0):
+        return 'n/a'
+    s = int(seconds)
+    if s < 60:
+        return f'{s}s'
+    if s < 3600:
+        return f'{s // 60}m {s % 60:02d}s'
+    h, rem = divmod(s, 3600)
+    return f'{h}h {rem // 60:02d}m'
+
+
+def _write_progress(
+    run_dir: Path,
+    *,
+    run_id: str,
+    run_started_utc: str,
+    total: int,
+    processed: int,
+    successes: int,
+    failures: int,
+    skipped: int,
+    current_target: str | None,
+    elapsed_seconds: float,
+    statuses: list[BatchTargetStatus],
+) -> None:
+    run_dir.mkdir(parents=True, exist_ok=True)
+    recent_success_runtimes = [
+        s.runtime_seconds for s in statuses[-_PROGRESS_ROLLING_WINDOW:]
+        if s.status == 'success'
+    ]
+    rolling_mean = (
+        statistics.mean(recent_success_runtimes) if recent_success_runtimes else None
+    )
+    remaining = max(0, total - processed)
+    eta_seconds = rolling_mean * remaining if rolling_mean is not None else None
+    last_5 = [
+        {'target': s.target, 'status': s.status, 'runtime_seconds': s.runtime_seconds,
+         **({'error': s.error} if s.error else {})}
+        for s in statuses[-5:]
+    ]
+    percent = (100.0 * processed / total) if total > 0 else 0.0
+    now_utc = datetime.now(tz=timezone.utc).isoformat()
+
+    json_payload = {
+        'schema_version': 1,
+        'run_id': run_id,
+        'run_started_utc': run_started_utc,
+        'last_updated_utc': now_utc,
+        'total': total,
+        'processed': processed,
+        'successes': successes,
+        'failures': failures,
+        'skipped_completed': skipped,
+        'percent_complete': round(percent, 1),
+        'current_target': current_target,
+        'elapsed_seconds': round(elapsed_seconds, 1),
+        'rolling_mean_runtime_seconds': (
+            round(rolling_mean, 1) if rolling_mean is not None else None
+        ),
+        'eta_seconds': round(eta_seconds, 1) if eta_seconds is not None else None,
+        'last_5_statuses': last_5,
+    }
+    json_path = run_dir / 'progress.json'
+    json_tmp = run_dir / 'progress.json.tmp'
+    json_tmp.write_text(json.dumps(json_payload, indent=2, sort_keys=True), encoding='utf-8')
+    os.replace(json_tmp, json_path)
+
+    txt_lines = [
+        'Exohunt batch progress',
+        '======================',
+        f'Run: {run_id}',
+        f'Started: {run_started_utc}',
+        f'Updated: {now_utc}',
+        '',
+        f'Progress: {processed} / {total}  ({percent:.1f}%)',
+        f'  ✓ {successes} succeeded',
+        f'  ✗ {failures} failed',
+        f'  → {skipped} skipped (prior runs)',
+        '',
+        f'Current: {current_target or "(idle)"}',
+        f'Elapsed: {_format_duration(elapsed_seconds)}',
+        f'ETA:     {_format_duration(eta_seconds)}',
+    ]
+    if rolling_mean is not None:
+        txt_lines.append(
+            f'(based on rolling mean of last '
+            f'{len(recent_success_runtimes)} runs: {rolling_mean:.1f}s/target)'
+        )
+    txt_lines.append('')
+    txt_lines.append('Recent targets (last 5):')
+    status_symbol = {'success': '✓', 'failed': '✗', 'skipped_completed': '→'}
+    for s in statuses[-5:]:
+        sym = status_symbol.get(s.status, '?')
+        line = f'  {sym} {s.target:20s} ({s.runtime_seconds:.1f}s)'
+        if s.error:
+            line += f'   {s.error}'
+        txt_lines.append(line)
+    txt = '\n'.join(txt_lines) + '\n'
+    txt_path = run_dir / 'progress.txt'
+    txt_tmp = run_dir / 'progress.txt.tmp'
+    txt_tmp.write_text(txt, encoding='utf-8')
+    os.replace(txt_tmp, txt_path)
+
+
 def run_batch_analysis(
     targets: list[str],
     config: RuntimeConfig,
@@ -133,6 +243,19 @@ def run_batch_analysis(
             )
             _render_progress("Batch targets", idx, total)
             continue
+
+        try:
+            _write_progress(
+                run_dir, run_id=run_dir.name, run_started_utc=run_utc,
+                total=total, processed=idx - 1,
+                successes=sum(1 for s in statuses if s.status == 'success'),
+                failures=sum(1 for s in statuses if s.status == 'failed'),
+                skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
+                current_target=target, elapsed_seconds=perf_counter() - _batch_start,
+                statuses=statuses,
+            )
+        except Exception as exc:
+            LOGGER.warning('Failed to write progress: %s', exc)
 
         target_started = perf_counter()
         max_retries = 3
@@ -193,6 +316,18 @@ def run_batch_analysis(
             state_payload["failed_targets"] = sorted(failed)
             state_payload["errors"] = errors
             _save_batch_state(state_path, state_payload)
+            try:
+                _write_progress(
+                    run_dir, run_id=run_dir.name, run_started_utc=run_utc,
+                    total=total, processed=idx,
+                    successes=sum(1 for s in statuses if s.status == 'success'),
+                    failures=sum(1 for s in statuses if s.status == 'failed'),
+                    skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
+                    current_target=None, elapsed_seconds=perf_counter() - _batch_start,
+                    statuses=statuses,
+                )
+            except Exception as exc:
+                LOGGER.warning('Failed to write progress: %s', exc)
             _render_progress("Batch targets", idx, total)
 
     status_csv, status_json = _write_batch_status_report(status_path, statuses)
