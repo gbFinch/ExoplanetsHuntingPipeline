@@ -286,13 +286,34 @@ def write_target_summary(
         iters: dict[int, list] = {}
         for c in bls_candidates:
             iters.setdefault(c.iteration, []).append(c)
-        # Top-power candidate per iteration (for masked text)
+        # Top-masked candidate per iteration. The iterative loop in
+        # run_iterative_bls_search masks by tagged_all[:iterative_top_n]
+        # order (TLS coarse-SDE rank order), not by the post-refine .power
+        # stored here. Approximate by picking the lowest-rank candidate
+        # per iteration, matching what was actually masked.
         top_by_iter: dict[int, object] = {}
         for it, cands in iters.items():
-            top_by_iter[it] = max(cands, key=lambda x: x.power)
+            top_by_iter[it] = min(cands, key=lambda x: x.rank)
 
-        for iter_n in sorted(iters):
-            cands = iters[iter_n]
+        # Determine how many iterations were configured. The iterative loop
+        # in run_iterative_bls_search breaks on the first iteration that
+        # returns no candidates, so at most ONE trailing empty iteration
+        # actually ran (the one that caused the break).
+        configured_passes = 1
+        if config is not None:
+            bls_cfg = getattr(config, "bls", None)
+            if bls_cfg is not None and getattr(bls_cfg, "iterative_masking", False):
+                configured_passes = int(getattr(bls_cfg, "iterative_passes", 1))
+
+        last_productive = max(iters) if iters else -1
+        # Render 0..last_productive from actual data, plus one trailing empty
+        # iteration if configured_passes allows it.
+        iters_to_render = list(range(last_productive + 1))
+        if last_productive + 1 < configured_passes:
+            iters_to_render.append(last_productive + 1)
+
+        for iter_n in iters_to_render:
+            cands = iters.get(iter_n, [])
             lines.append(f"### Iteration {iter_n}")
             # Masked text
             if iter_n == 0:
@@ -308,20 +329,29 @@ def write_target_summary(
                         break
                     top = top_by_iter[prev_it]
                     prior_parts.append(f"P = {top.period_days:.4f} d")
-                lines.append(f"Masked: known planets + prior iterations (top candidates at {', '.join(prior_parts)})")
-            lines.append(f"Candidates found: {len(cands)}")
-            for c in cands:
-                bullet = f"- rank {c.rank}: P = {c.period_days:.4f} d, depth = {c.depth_ppm:.1f} ppm, SNR = {c.snr:.1f}"
-                vr = vetting_by_rank.get(c.rank)
-                if vr is not None:
-                    if vr.vetting_pass:
-                        if vr.vetting_reasons == "pass":
-                            bullet += " — **PASS**"
+                if prior_parts:
+                    lines.append(
+                        f"Masked: known planets + prior iterations "
+                        f"(top candidates at {', '.join(prior_parts)})"
+                    )
+                else:
+                    lines.append("Masked: known planets only")
+            if cands:
+                lines.append(f"Candidates found: {len(cands)}")
+                for c in cands:
+                    bullet = f"- rank {c.rank}: P = {c.period_days:.4f} d, depth = {c.depth_ppm:.1f} ppm, SNR = {c.snr:.1f}"
+                    vr = vetting_by_rank.get(c.rank)
+                    if vr is not None:
+                        if vr.vetting_pass:
+                            if vr.vetting_reasons == "pass":
+                                bullet += " — **PASS**"
+                            else:
+                                bullet += f" — PASS ({vr.vetting_reasons})"
                         else:
-                            bullet += f" — PASS ({vr.vetting_reasons})"
-                    else:
-                        bullet += f" — FAIL ({vr.vetting_reasons})"
-                lines.append(bullet)
+                            bullet += f" — FAIL ({vr.vetting_reasons})"
+                    lines.append(bullet)
+            else:
+                lines.append("Candidates found: 0 (search terminated — no peaks above SDE threshold)")
             lines.append("")
     else:
         lines.append("## Search results")
