@@ -1,6 +1,6 @@
 from exohunt.config import (
     RuntimeConfig, IOConfig, IngestConfig, PreprocessConfig,
-    PlotConfig, BLSConfig, VettingConfig, ParameterConfig,
+    PlotConfig, BLSConfig, BatchConfig, VettingConfig, ParameterConfig,
 )
 
 
@@ -39,6 +39,7 @@ def _test_config(**overrides) -> RuntimeConfig:
             unique_period_separation_fraction=0.05,
             iterative_passes=1, subtraction_model="box_mask",
             iterative_top_n=1, transit_mask_padding_factor=1.5,
+            tls_threads=-1,
         ),
         vetting=VettingConfig(
             min_transit_count=2,
@@ -53,6 +54,11 @@ def _test_config(**overrides) -> RuntimeConfig:
             apply_limb_darkening_correction=False,
             limb_darkening_u1=0.4, limb_darkening_u2=0.2,
             tic_density_lookup=False,
+        ),
+        batch=BatchConfig(
+            parallelism=1,
+            max_retries=0,
+            retry_base_seconds=2.0,
         ),
     )
 

@@ -49,6 +49,7 @@ def run_tls_search(
     bin_minutes: float = 10.0,
     unique_period_separation_fraction: float = 0.05,
     stellar_params: "StellarParams | None" = None,
+    use_threads: int = 1,
 ) -> list[BLSCandidate]:
     """Run TLS once, extract top N unique peaks from the SDE periodogram.
 
@@ -56,6 +57,9 @@ def run_tls_search(
     parameters (depth, duration, T0).  Returns BLSCandidate objects for
     compatibility with existing pipeline code.
     """
+    n_threads = max(1, int(use_threads))
+    LOGGER.info("TLS: using %d thread(s)", n_threads)
+
     from transitleastsquares import transitleastsquares
 
     time = np.asarray(lc_prepared.time.value, dtype=float)
@@ -99,7 +103,7 @@ def run_tls_search(
         period_max=p_max,
         n_transits_min=2,
         show_progress_bar=False,
-        use_threads=1,
+        use_threads=n_threads,
         **stellar_kw,
     )
 
@@ -138,7 +142,7 @@ def run_tls_search(
             narrow = transitleastsquares(time_b, flux_b)
             r = narrow.power(
                 period_min=p * 0.99, period_max=p * 1.01,
-                n_transits_min=2, show_progress_bar=False, use_threads=1,
+                n_transits_min=2, show_progress_bar=False, use_threads=n_threads,
                 **stellar_kw,
             )
 

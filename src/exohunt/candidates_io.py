@@ -48,6 +48,7 @@ _CANDIDATE_COLUMNS = [
     "alias_harmonic_with_rank",
     "vetting_reasons",
     "odd_even_status",
+    "is_known",
 ]
 
 
@@ -104,6 +105,7 @@ def _write_bls_candidates(
     parameter_estimates_by_rank: dict[int, CandidateParameterEstimate] | None = None,
     *,
     run_dir: Path,
+    known_periods: list[float] | None = None,
 ) -> tuple[Path, Path]:
     output_dir = _target_artifact_dir(target, "candidates", outputs_root=run_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -155,6 +157,7 @@ def _write_bls_candidates(
                         "vetting_reasons": "",
                     }
                 )
+            row["is_known"] = _is_known_period(candidate.period_days, known_periods) if known_periods else False
             writer.writerow(row)
 
     payload = {
@@ -169,6 +172,7 @@ def _write_bls_candidates(
         vetting = (vetting_by_rank or {}).get(int(candidate.rank))
         if vetting is not None:
             row.update(asdict(vetting))
+        row["is_known"] = _is_known_period(candidate.period_days, known_periods) if known_periods else False
         payload["candidates"].append(row)
     json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     return csv_path, json_path
@@ -187,11 +191,59 @@ def _row_values(target, c, vr):
     ]
 
 
+def _is_known_period(period_days: float, known_periods: list[float], tolerance: float = 0.03) -> bool:
+    for kp in known_periods:
+        if kp <= 0:
+            continue
+        ratio = period_days / kp
+        for mult in (1, 2, 3, 0.5, 1 / 3):
+            if abs(ratio - mult) < tolerance:
+                return True
+    return False
+
+
+def collect_live_from_run(run_dir: Path) -> tuple[Path, Path]:
+    """Walk per-target candidate JSONs and emit live/novel CSVs."""
+    live_csv = run_dir / "candidates_live.csv"
+    novel_csv = run_dir / "candidates_novel.csv"
+    live_rows: list[list[str]] = []
+    novel_rows: list[list[str]] = []
+    for json_path in sorted(run_dir.glob("*/candidates/*__bls_*.json")):
+        try:
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        target = payload.get("metadata", {}).get("target", "")
+        for c in payload.get("candidates", []):
+            row = [
+                target,
+                str(c.get("rank", "")),
+                f"{float(c.get('period_days', 0)):.6f}",
+                f"{float(c.get('depth_ppm', 0)):.1f}",
+                f"{float(c.get('snr', 0)):.2f}",
+                f"{float(c.get('duration_hours', 0)):.3f}",
+                f"{float(c.get('transit_time', 0)):.6f}",
+                str(c.get("iteration", 0)),
+                str(c.get("vetting_reasons", "")),
+                str(c.get("vetting_pass", "")),
+            ]
+            live_rows.append(row)
+            if c.get("vetting_pass") is True and not c.get("is_known", False):
+                novel_rows.append(row)
+    for csv_path, rows in ((live_csv, live_rows), (novel_csv, novel_rows)):
+        with csv_path.open("w", newline="", encoding="utf-8") as f:
+            w = csv.writer(f)
+            w.writerow(_LIVE_COLS.split(","))
+            w.writerows(rows)
+    return live_csv, novel_csv
+
+
 def _append_live_candidates(
     target: str, candidates: list, vetting: dict, known_ephemerides: list,
     *, run_dir: Path,
 ) -> None:
-    """Append candidates to live summary CSV; novel-only to a second CSV."""
+    """# Deprecated: no longer called from the hot path; use collect_live_from_run instead.
+    Append candidates to live summary CSV; novel-only to a second CSV."""
     live_csv = run_dir / "candidates_live.csv"
     novel_csv = run_dir / "candidates_novel.csv"
     for csv_path in (live_csv, novel_csv):

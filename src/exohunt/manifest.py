@@ -59,6 +59,15 @@ def _runtime_version_map() -> dict[str, str]:
     }
 
 
+def _shard_path_if_requested(canonical: Path) -> Path:
+    """Return a PID-sharded variant of *canonical* iff EXOHUNT_SHARD_WRITES=1."""
+    import os
+    if os.environ.get("EXOHUNT_SHARD_WRITES") != "1":
+        return canonical
+    stem = canonical.stem
+    return canonical.with_name(f"{stem}.worker-{os.getpid()}{canonical.suffix}")
+
+
 def _write_manifest_index_row(path: Path, row: dict[str, str | int | float | bool]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     write_header = not path.exists()
@@ -154,7 +163,7 @@ def _write_run_manifest(
         "manifest_path": str(manifest_path),
     }
 
-    run_index_path = run_dir / "run_manifest_index.csv"
+    run_index_path = _shard_path_if_requested(run_dir / "run_manifest_index.csv")
     target_index_path = target_manifest_dir / "run_manifest_index.csv"
     _write_manifest_index_row(run_index_path, index_row)
     _write_manifest_index_row(target_index_path, index_row)

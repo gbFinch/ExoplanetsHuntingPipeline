@@ -157,3 +157,38 @@ def test_get_builtin_preset_metadata_returns_stable_version_and_hash():
     assert meta.name == "science-default"
     assert meta.version == BUILTIN_PRESET_PACK_VERSION
     assert len(meta.hash) == 16
+
+
+def test_defaults_include_tls_threads_and_batch():
+    config = resolve_runtime_config()
+    assert config.bls.tls_threads == -1
+    assert config.batch.parallelism == -1
+    assert config.batch.max_retries == 3
+    assert config.batch.retry_base_seconds == 30.0
+
+
+def test_batch_config_cli_override():
+    config = resolve_runtime_config(cli_overrides={"batch": {"parallelism": 4}})
+    assert config.batch.parallelism == 4
+
+
+def test_bls_tls_threads_cli_override():
+    config = resolve_runtime_config(cli_overrides={"bls": {"tls_threads": 8}})
+    assert config.bls.tls_threads == 8
+
+
+def test_invalid_parallelism_rejected():
+    with pytest.raises(ConfigValidationError, match="batch.parallelism"):
+        resolve_runtime_config(cli_overrides={"batch": {"parallelism": 0}})
+
+
+def test_invalid_tls_threads_rejected():
+    with pytest.raises(ConfigValidationError, match="bls.tls_threads"):
+        resolve_runtime_config(cli_overrides={"bls": {"tls_threads": 0}})
+
+
+def test_preset_config_roundtrip_includes_batch(tmp_path: Path):
+    out = tmp_path / "roundtrip.toml"
+    write_preset_config(preset_name="science-default", out_path=out)
+    config = resolve_runtime_config(config_path=out)
+    assert config.batch.parallelism == -1

@@ -35,6 +35,7 @@ def test_build_run_id_format():
 def test_resume_loads_existing_state(monkeypatch, tmp_path):
     """Create state file with completed_targets, verify batch skips them."""
     from exohunt.batch import run_batch_analysis
+    from exohunt.cache import _target_output_dir
 
     run_dir = tmp_path / "existing_run"
     run_dir.mkdir()
@@ -47,6 +48,11 @@ def test_resume_loads_existing_state(monkeypatch, tmp_path):
         "errors": {},
     }
     (run_dir / "run_state.json").write_text(json.dumps(state), encoding="utf-8")
+    # Write .done sentinels for completed targets (plan 007 step 5).
+    for t in ["TIC 1", "TIC 3"]:
+        d = _target_output_dir(t, run_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".done").write_text("2026-01-01T00:00:00+00:00")
 
     calls: list[str] = []
 

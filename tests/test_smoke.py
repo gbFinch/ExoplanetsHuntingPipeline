@@ -481,6 +481,11 @@ def test_run_batch_analysis_resumable_and_failure_isolated(monkeypatch, tmp_path
         calls.append(target)
         if target == "TIC 2":
             raise RuntimeError("simulated failure")
+        # Write .done sentinel (plan 007 step 5).
+        from exohunt.cache import _target_output_dir
+        d = _target_output_dir(target, run_dir)
+        d.mkdir(parents=True, exist_ok=True)
+        (d / ".done").write_text("done")
         return None
 
     monkeypatch.setattr(pipeline, "fetch_and_plot", _fake_fetch_and_plot)

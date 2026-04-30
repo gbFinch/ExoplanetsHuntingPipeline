@@ -96,6 +96,15 @@ def _save_cached_metrics(metrics_cache_path: Path, metrics: dict[str, float | in
     metrics_cache_path.write_text(json.dumps(metrics, sort_keys=True, indent=2), encoding="utf-8")
 
 
+def _shard_path_if_requested(canonical: Path) -> Path:
+    """Return a PID-sharded variant of *canonical* iff EXOHUNT_SHARD_WRITES=1."""
+    import os
+    if os.environ.get("EXOHUNT_SHARD_WRITES") != "1":
+        return canonical
+    stem = canonical.stem
+    return canonical.with_name(f"{stem}.worker-{os.getpid()}{canonical.suffix}")
+
+
 def _write_preprocessing_metrics(
     target: str,
     preprocess_mode: str,
@@ -129,7 +138,7 @@ def _write_preprocessing_metrics(
             raise KeyError(f"Missing preprocessing metric key: {key}")
         row[key] = metrics[key]
 
-    csv_path = aggregate_output_dir / "preprocessing_summary.csv"
+    csv_path = _shard_path_if_requested(aggregate_output_dir / "preprocessing_summary.csv")
     write_header = not csv_path.exists()
     with csv_path.open("a", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=_PREPROCESSING_SUMMARY_COLUMNS)

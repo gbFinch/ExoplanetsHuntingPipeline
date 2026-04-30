@@ -6,6 +6,7 @@ __pycache__/
 .ruff_cache/
 .cache/
 .docs/
+.kiro-memory/
 src/*.egg-info/
 outputs/
 outputs/plots/

@@ -29,10 +29,10 @@ from exohunt.cache import (
     _segment_prepared_cache_path,
     _segment_raw_cache_path,
     _target_artifact_dir,
+    _target_output_dir,
     _write_segment_manifest,
 )
 from exohunt.candidates_io import (
-    _append_live_candidates,
     _candidate_output_key,
     _write_bls_candidates,
 )
@@ -538,6 +538,7 @@ def _search_and_output_stage(
                     metadata=segment_metadata,
                     candidates=segment_candidates,
                     run_dir=run_dir,
+                    known_periods=[e.period_days for e in known],
                     vetting_by_rank=vet_bls_candidates(
                         lc_prepared=segment.lc,
                         candidates=segment_candidates,
@@ -615,6 +616,7 @@ def _search_and_output_stage(
                     subtraction_model=bls_subtraction_model,
                     iterative_top_n=bls_iterative_top_n,
                     transit_mask_padding_factor=bls_transit_mask_padding_factor,
+                    tls_threads=config.bls.tls_threads,
                 )
                 iter_pp_cfg = PreprocessConfig(
                     enabled=True, mode="per-sector",
@@ -784,6 +786,7 @@ def _search_and_output_stage(
             metadata=candidate_metadata,
             candidates=bls_candidates,
             run_dir=run_dir,
+            known_periods=[e.period_days for e in known],
             vetting_by_rank=stitched_vetting_by_rank,
             parameter_estimates_by_rank=parameter_estimates_by_rank,
         )
@@ -803,6 +806,7 @@ def _search_and_output_stage(
                     metadata=iter_metadata,
                     candidates=iter_cands,
                     run_dir=run_dir,
+                    known_periods=[e.period_days for e in known],
                     vetting_by_rank=stitched_vetting_by_rank,
                     parameter_estimates_by_rank=estimate_candidate_parameters(
                         candidates=iter_cands,
@@ -902,10 +906,6 @@ def _search_and_output_stage(
                 val_path.parent.mkdir(parents=True, exist_ok=True)
                 val_path.write_text(json.dumps(validation_results, indent=2), encoding="utf-8")
                 LOGGER.info("TRICERATOPS results written to %s", val_path)
-
-    # Append passing candidates to live summary CSVs
-    if bls_candidates and stitched_vetting_by_rank:
-        _append_live_candidates(target, bls_candidates, stitched_vetting_by_rank, known, run_dir=run_dir)
 
     # Best-effort: write human-readable summary.md for this target
     try:
@@ -1393,5 +1393,13 @@ def fetch_and_plot(
         search_result=search, plot_result=plots,
         run_dir=run_dir,
     )
+
+    # Atomic completion marker — see plan 007 step 5.
+    try:
+        done_path = _target_output_dir(target, run_dir) / ".done"
+        done_path.parent.mkdir(parents=True, exist_ok=True)
+        done_path.write_text(datetime.now(tz=timezone.utc).isoformat(), encoding="utf-8")
+    except OSError as exc:
+        LOGGER.warning("Failed to write .done sentinel: %s", exc)
 
     return plots.output_paths[0] if plots.output_paths else None

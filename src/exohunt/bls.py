@@ -414,6 +414,9 @@ def run_iterative_bls_search(
         iter_lc = lk.LightCurve(time=lc_prepared.time, flux=flux)
         if getattr(config, "search_method", "bls") == "tls":
             from exohunt.tls import run_tls_search
+            import os as _os
+            tls_threads_cfg = getattr(config, "tls_threads", 1)
+            n_threads = tls_threads_cfg if tls_threads_cfg > 0 else (_os.cpu_count() or 1)
             candidates = run_tls_search(
                 lc_prepared=iter_lc,
                 period_min_days=config.period_min_days,
@@ -422,6 +425,7 @@ def run_iterative_bls_search(
                 min_sde=config.min_snr,
                 unique_period_separation_fraction=config.unique_period_separation_fraction,
                 stellar_params=stellar_params,
+                use_threads=n_threads,
             )
         else:
             candidates = run_bls_search(

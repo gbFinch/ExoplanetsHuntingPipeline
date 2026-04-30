@@ -5,13 +5,14 @@ import json
 import logging
 import os
 import statistics
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace as _dc_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
 
 from exohunt import pipeline as _pipeline_mod
 from exohunt.cache import DEFAULT_CACHE_DIR
+from exohunt.candidates_io import collect_live_from_run
 from exohunt.config import PresetMeta, RuntimeConfig
 from exohunt.manifest import write_run_readme
 from exohunt.progress import _render_progress
@@ -70,6 +71,7 @@ def _write_batch_status_report(
     status_path: Path,
     statuses: list[BatchTargetStatus],
 ) -> tuple[Path, Path]:
+    statuses = sorted(statuses, key=lambda s: s.target)
     status_path.parent.mkdir(parents=True, exist_ok=True)
     with status_path.open("w", newline="", encoding="utf-8") as handle:
         writer = csv.DictWriter(handle, fieldnames=_BATCH_STATUS_COLUMNS)
@@ -191,6 +193,133 @@ def _write_progress(
     os.replace(txt_tmp, txt_path)
 
 
+def _merge_shards(canonical: Path) -> None:
+    """Concatenate <canonical>.worker-*.csv shards into <canonical> and remove them."""
+    import glob
+    stem = canonical.stem
+    pattern = str(canonical.with_name(f"{stem}.worker-*{canonical.suffix}"))
+    shards = sorted(glob.glob(pattern))
+    if not shards:
+        return
+    canonical.parent.mkdir(parents=True, exist_ok=True)
+    canonical_exists = canonical.exists()
+    with canonical.open("a", encoding="utf-8") as out:
+        for i, shard in enumerate(shards):
+            try:
+                with open(shard, "r", encoding="utf-8") as f:
+                    lines = f.readlines()
+            except OSError:
+                continue
+            if not lines:
+                continue
+            start = 1 if (canonical_exists or i > 0) else 0
+            out.writelines(lines[start:])
+            canonical_exists = True
+            try:
+                Path(shard).unlink()
+            except OSError:
+                pass
+
+
+def _target_is_done(run_dir: Path, target: str, completed: set[str]) -> bool:
+    """True iff target is in completed set AND .done sentinel exists."""
+    if target not in completed:
+        return False
+    from exohunt.cache import _target_output_dir
+    return (_target_output_dir(target, run_dir) / ".done").exists()
+
+
+def _resolve_parallelism(n: int) -> int:
+    """Resolve config.batch.parallelism sentinel. -1 => max(1, cpu_count()-1)."""
+    if n > 0:
+        return n
+    cpu = os.cpu_count() or 1
+    return max(1, cpu - 1)
+
+
+def _run_one_target(
+    target: str,
+    config: RuntimeConfig,
+    run_dir: Path,
+    preset_meta: PresetMeta | None,
+    cache_dir: Path,
+    no_cache: bool,
+    max_download_files: int | None,
+) -> tuple[str, str, str, str]:
+    """Run fetch_and_plot for one target with full-jitter retries.
+
+    Returns (status, output_path, error_str, target) where status is
+    'success' or 'failed'. Picklable; runs in any process.
+    """
+    import random as _random
+    import time as _time
+
+    max_retries = int(config.batch.max_retries)
+    base_seconds = float(config.batch.retry_base_seconds)
+
+    try:
+        for attempt in range(max_retries + 1):
+            try:
+                output_path = _pipeline_mod.fetch_and_plot(
+                    target=target,
+                    config=config,
+                    run_dir=run_dir,
+                    preset_meta=preset_meta,
+                    cache_dir=cache_dir,
+                    no_cache=no_cache,
+                    max_download_files=max_download_files,
+                )
+                return ("success", str(output_path) if output_path else "", "", target)
+            except (OSError, ConnectionError, TimeoutError) as net_exc:
+                if attempt < max_retries:
+                    wait = _random.uniform(0, base_seconds * (2 ** attempt))
+                    LOGGER.warning(
+                        "Network error on %s (attempt %d/%d), retrying in %.1fs: %s",
+                        target, attempt + 1, max_retries, wait, net_exc,
+                    )
+                    _time.sleep(wait)
+                else:
+                    raise
+    except Exception as exc:
+        LOGGER.exception("Batch target failed: %s (%s)", target, exc)
+        return ("failed", "", str(exc), target)
+    return ("failed", "", "unknown error", target)
+
+
+def _record_result(
+    statuses: list[BatchTargetStatus],
+    state_payload: dict,
+    state_path: Path,
+    completed: set[str],
+    failed: set[str],
+    errors: dict,
+    *,
+    target: str,
+    status: str,
+    output_path: str,
+    error_str: str,
+    runtime: float,
+    run_utc: str,
+) -> None:
+    """Append a status row, update batch state, persist to disk. Parent-only."""
+    if status == "success":
+        completed.add(target)
+        failed.discard(target)
+        errors.pop(target, None)
+    else:
+        failed.add(target)
+        errors[target] = error_str
+    statuses.append(BatchTargetStatus(
+        run_utc=run_utc, target=target, status=status,
+        error=error_str, runtime_seconds=float(runtime),
+        output_path=output_path,
+    ))
+    state_payload["completed_targets"] = sorted(completed)
+    state_payload["failed_targets"] = sorted(failed)
+    state_payload["errors"] = errors
+    _save_batch_state(state_path, state_payload)
+
+
 def run_batch_analysis(
     targets: list[str],
     config: RuntimeConfig,
@@ -229,106 +358,142 @@ def run_batch_analysis(
     run_utc = datetime.now(tz=timezone.utc).isoformat()
     _batch_start = perf_counter()
     total = len(deduped_targets)
-    for idx, target in enumerate(deduped_targets, start=1):
-        if target in completed:
-            statuses.append(
-                BatchTargetStatus(
-                    run_utc=run_utc,
-                    target=target,
-                    status="skipped_completed",
-                    error="",
-                    runtime_seconds=0.0,
-                    output_path="",
-                )
-            )
-            _render_progress("Batch targets", idx, total)
-            continue
+    parallelism = _resolve_parallelism(int(config.batch.parallelism))
+    LOGGER.info("Batch parallelism: %d worker(s)", parallelism)
 
-        try:
-            _write_progress(
-                run_dir, run_id=run_dir.name, run_started_utc=run_utc,
-                total=total, processed=idx - 1,
-                successes=sum(1 for s in statuses if s.status == 'success'),
-                failures=sum(1 for s in statuses if s.status == 'failed'),
-                skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
-                current_target=target, elapsed_seconds=perf_counter() - _batch_start,
-                statuses=statuses,
-            )
-        except Exception as exc:
-            LOGGER.warning('Failed to write progress: %s', exc)
+    if parallelism > 1:
+        worker_config = _dc_replace(config, bls=_dc_replace(config.bls, tls_threads=1))
+        _prev_shard_env = os.environ.get("EXOHUNT_SHARD_WRITES")
+        _prev_mpl_backend = os.environ.get("MPLBACKEND")
+        _prev_numba_threads = os.environ.get("NUMBA_NUM_THREADS")
+        os.environ["EXOHUNT_SHARD_WRITES"] = "1"
+        # Force non-GUI matplotlib backend in workers. macOS's default `MacOSX`
+        # backend initializes AppKit, which crashes (SIGABRT) when imported in
+        # a spawn()-ed subprocess. Agg is headless and safe in any process.
+        os.environ["MPLBACKEND"] = "Agg"
+        # Serialize numba in workers. TLS uses numba; if each worker has its own
+        # numba thread pool AND parallelism > 1, the interaction with spawn's
+        # process teardown can hang the parent waiting on worker results.
+        os.environ["NUMBA_NUM_THREADS"] = "1"
+    else:
+        worker_config = config
+        _prev_shard_env = None
+        _prev_mpl_backend = None
+        _prev_numba_threads = None
 
-        target_started = perf_counter()
-        max_retries = 3
-        try:
-            for attempt in range(max_retries + 1):
+    try:
+        if parallelism <= 1:
+            for idx, target in enumerate(deduped_targets, start=1):
+                if _target_is_done(run_dir, target, completed):
+                    statuses.append(BatchTargetStatus(
+                        run_utc=run_utc, target=target, status="skipped_completed",
+                        error="", runtime_seconds=0.0, output_path="",
+                    ))
+                    _render_progress("Batch targets", idx, total)
+                    continue
                 try:
-                    output_path = _pipeline_mod.fetch_and_plot(
-                        target=target,
-                        config=config,
-                        run_dir=run_dir,
-                        preset_meta=preset_meta,
-                        cache_dir=cache_dir,
-                        no_cache=no_cache,
-                        max_download_files=max_download_files,
+                    _write_progress(
+                        run_dir, run_id=run_dir.name, run_started_utc=run_utc,
+                        total=total, processed=idx - 1,
+                        successes=sum(1 for s in statuses if s.status == 'success'),
+                        failures=sum(1 for s in statuses if s.status == 'failed'),
+                        skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
+                        current_target=target, elapsed_seconds=perf_counter() - _batch_start,
+                        statuses=statuses,
                     )
-                    break  # success
-                except (OSError, ConnectionError, TimeoutError) as net_exc:
-                    if attempt < max_retries:
-                        wait = 30 * (2 ** attempt)
-                        LOGGER.warning(
-                            "Network error on %s (attempt %d/%d), retrying in %ds: %s",
-                            target, attempt + 1, max_retries, wait, net_exc,
-                        )
-                        import time as _time
-                        _time.sleep(wait)
-                    else:
-                        raise
-        except Exception as exc:
-            failed.add(target)
-            errors[target] = str(exc)
-            statuses.append(
-                BatchTargetStatus(
-                    run_utc=run_utc,
-                    target=target,
-                    status="failed",
-                    error=str(exc),
-                    runtime_seconds=float(perf_counter() - target_started),
-                    output_path="",
+                except Exception as exc:
+                    LOGGER.warning('Failed to write progress: %s', exc)
+
+                target_started = perf_counter()
+                status, output_path, error_str, _ = _run_one_target(
+                    target, worker_config, run_dir, preset_meta,
+                    cache_dir, no_cache, max_download_files,
                 )
-            )
-            LOGGER.exception("Batch target failed: %s (%s)", target, exc)
+                _record_result(
+                    statuses, state_payload, state_path,
+                    completed, failed, errors,
+                    target=target, status=status, output_path=output_path,
+                    error_str=error_str, runtime=perf_counter() - target_started,
+                    run_utc=run_utc,
+                )
+                try:
+                    _write_progress(
+                        run_dir, run_id=run_dir.name, run_started_utc=run_utc,
+                        total=total, processed=idx,
+                        successes=sum(1 for s in statuses if s.status == 'success'),
+                        failures=sum(1 for s in statuses if s.status == 'failed'),
+                        skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
+                        current_target=None, elapsed_seconds=perf_counter() - _batch_start,
+                        statuses=statuses,
+                    )
+                except Exception as exc:
+                    LOGGER.warning('Failed to write progress: %s', exc)
+                _render_progress("Batch targets", idx, total)
         else:
-            completed.add(target)
-            failed.discard(target)
-            errors.pop(target, None)
-            statuses.append(
-                BatchTargetStatus(
-                    run_utc=run_utc,
-                    target=target,
-                    status="success",
-                    error="",
-                    runtime_seconds=float(perf_counter() - target_started),
-                    output_path=str(output_path) if output_path is not None else "",
-                )
-            )
-        finally:
-            state_payload["completed_targets"] = sorted(completed)
-            state_payload["failed_targets"] = sorted(failed)
-            state_payload["errors"] = errors
-            _save_batch_state(state_path, state_payload)
-            try:
-                _write_progress(
-                    run_dir, run_id=run_dir.name, run_started_utc=run_utc,
-                    total=total, processed=idx,
-                    successes=sum(1 for s in statuses if s.status == 'success'),
-                    failures=sum(1 for s in statuses if s.status == 'failed'),
-                    skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
-                    current_target=None, elapsed_seconds=perf_counter() - _batch_start,
-                    statuses=statuses,
-                )
-            except Exception as exc:
-                LOGGER.warning('Failed to write progress: %s', exc)
-            _render_progress("Batch targets", idx, total)
+            from concurrent.futures import ProcessPoolExecutor, as_completed
+            import multiprocessing
+
+            pending: list[str] = []
+            for target in deduped_targets:
+                if _target_is_done(run_dir, target, completed):
+                    statuses.append(BatchTargetStatus(
+                        run_utc=run_utc, target=target, status="skipped_completed",
+                        error="", runtime_seconds=0.0, output_path="",
+                    ))
+                else:
+                    pending.append(target)
+
+            target_start_times: dict[str, float] = {}
+            ctx = multiprocessing.get_context('spawn')
+            with ProcessPoolExecutor(max_workers=parallelism, mp_context=ctx) as pool:
+                future_to_target = {}
+                for target in pending:
+                    target_start_times[target] = perf_counter()
+                    fut = pool.submit(
+                        _run_one_target, target, worker_config, run_dir, preset_meta,
+                        cache_dir, no_cache, max_download_files,
+                    )
+                    future_to_target[fut] = target
+
+                processed_count = len(statuses)
+                for fut in as_completed(future_to_target):
+                    target = future_to_target[fut]
+                    try:
+                        status, output_path, error_str, _ = fut.result()
+                    except Exception as exc:
+                        status, output_path, error_str = "failed", "", str(exc)
+                    runtime = perf_counter() - target_start_times[target]
+                    _record_result(
+                        statuses, state_payload, state_path,
+                        completed, failed, errors,
+                        target=target, status=status, output_path=output_path,
+                        error_str=error_str, runtime=runtime, run_utc=run_utc,
+                    )
+                    processed_count += 1
+                    try:
+                        _write_progress(
+                            run_dir, run_id=run_dir.name, run_started_utc=run_utc,
+                            total=total, processed=processed_count,
+                            successes=sum(1 for s in statuses if s.status == 'success'),
+                            failures=sum(1 for s in statuses if s.status == 'failed'),
+                            skipped=sum(1 for s in statuses if s.status == 'skipped_completed'),
+                            current_target=None,
+                            elapsed_seconds=perf_counter() - _batch_start,
+                            statuses=statuses,
+                        )
+                    except Exception as exc:
+                        LOGGER.warning('Failed to write progress: %s', exc)
+                    _render_progress("Batch targets", processed_count, total)
+    finally:
+        if parallelism > 1:
+            if _prev_shard_env is None:
+                os.environ.pop("EXOHUNT_SHARD_WRITES", None)
+            else:
+                os.environ["EXOHUNT_SHARD_WRITES"] = _prev_shard_env
+            if _prev_mpl_backend is None:
+                os.environ.pop("MPLBACKEND", None)
+            else:
+                os.environ["MPLBACKEND"] = _prev_mpl_backend
 
     status_csv, status_json = _write_batch_status_report(status_path, statuses)
     LOGGER.info("Batch run complete: %d targets", total)
@@ -349,5 +514,16 @@ def run_batch_analysis(
         )
     except Exception as exc:
         LOGGER.warning("Failed to write run README: %s", exc)
+
+    try:
+        collect_live_from_run(run_dir)
+    except Exception as exc:
+        LOGGER.warning("Failed to collect live candidates: %s", exc)
+
+    try:
+        _merge_shards(run_dir / "run_manifest_index.csv")
+        _merge_shards(run_dir / "preprocessing_summary.csv")
+    except Exception as exc:
+        LOGGER.warning("Failed to merge worker shards: %s", exc)
 
     return state_path, status_csv, status_json

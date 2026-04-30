@@ -77,6 +77,14 @@ class BLSConfig:
     subtraction_model: str
     iterative_top_n: int
     transit_mask_padding_factor: float
+    tls_threads: int
+
+
+@dataclass(frozen=True)
+class BatchConfig:
+    parallelism: int
+    max_retries: int
+    retry_base_seconds: float
 
 
 @dataclass(frozen=True)
@@ -112,6 +120,7 @@ class RuntimeConfig:
     bls: BLSConfig
     vetting: VettingConfig
     parameters: ParameterConfig
+    batch: BatchConfig
 
 
 @dataclass(frozen=True)
@@ -161,6 +170,7 @@ _DEFAULTS: dict[str, Any] = {
         "n_periods": 2000,
         "n_durations": 12,
         "top_n": 5,
+        "tls_threads": -1,
         "min_snr": 7.0,
         "compute_fap": False,
         "fap_iterations": 1000,
@@ -188,6 +198,11 @@ _DEFAULTS: dict[str, Any] = {
         "limb_darkening_u1": 0.4,
         "limb_darkening_u2": 0.2,
         "tic_density_lookup": False,
+    },
+    "batch": {
+        "parallelism": -1,
+        "max_retries": 3,
+        "retry_base_seconds": 30.0,
     },
 }
 
@@ -287,7 +302,7 @@ def _dump_toml(payload: Mapping[str, Any]) -> str:
     for key in scalar_keys:
         if key in payload:
             lines.append(f"{key} = {_encode_toml_value(payload[key])}")
-    for section in ["io", "ingest", "preprocess", "plot", "bls", "vetting", "parameters"]:
+    for section in ["io", "ingest", "preprocess", "plot", "bls", "vetting", "parameters", "batch"]:
         value = payload.get(section)
         if not isinstance(value, Mapping):
             continue
@@ -547,6 +562,7 @@ def resolve_runtime_config(
         transit_mask_padding_factor=_expect_float(
             bls_data, "transit_mask_padding_factor", scope="bls"
         ),
+        tls_threads=_expect_int(bls_data, "tls_threads", scope="bls"),
     )
 
     vetting_data = merged["vetting"]
@@ -593,6 +609,13 @@ def resolve_runtime_config(
         ),
     )
 
+    batch_data = merged["batch"]
+    batch = BatchConfig(
+        parallelism=_expect_int(batch_data, "parallelism", scope="batch"),
+        max_retries=_expect_int(batch_data, "max_retries", scope="batch"),
+        retry_base_seconds=_expect_float(batch_data, "retry_base_seconds", scope="batch"),
+    )
+
     if preprocess.outlier_sigma <= 0.0:
         raise ConfigValidationError("Invalid preprocess.outlier_sigma: must be > 0.")
     if preprocess.flatten_window_length <= 0 or preprocess.flatten_window_length % 2 == 0:
@@ -619,6 +642,18 @@ def resolve_runtime_config(
         raise ConfigValidationError(
             "Invalid mode coupling: plot.mode='per-sector' requires preprocess.mode='per-sector'."
         )
+    if bls.tls_threads < -1 or bls.tls_threads == 0:
+        raise ConfigValidationError(
+            "Invalid bls.tls_threads: must be -1 (auto) or a positive integer."
+        )
+    if batch.parallelism < -1 or batch.parallelism == 0:
+        raise ConfigValidationError(
+            "Invalid batch.parallelism: must be -1 (auto) or a positive integer."
+        )
+    if batch.max_retries < 0:
+        raise ConfigValidationError("Invalid batch.max_retries: must be >= 0.")
+    if batch.retry_base_seconds <= 0:
+        raise ConfigValidationError("Invalid batch.retry_base_seconds: must be > 0.")
 
     return RuntimeConfig(
         schema_version=schema_version,
@@ -630,4 +665,5 @@ def resolve_runtime_config(
         bls=bls,
         vetting=vetting,
         parameters=parameters,
+        batch=batch,
     )

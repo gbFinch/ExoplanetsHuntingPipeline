@@ -97,8 +97,14 @@ def _resolve_runtime(
     return runtime_config, preset_meta
 
 
-def _run_single_target(*, target: str, config_ref: str | None, run_name: str | None = None) -> None:
-    runtime_config, preset_meta = _resolve_runtime(config_ref=config_ref)
+def _run_single_target(*, target: str, config_ref: str | None, run_name: str | None = None, tls_threads: int | None = None) -> None:
+    cli_overrides: dict[str, object] = {}
+    if tls_threads is not None:
+        cli_overrides["bls"] = {"tls_threads": int(tls_threads)}
+    runtime_config, preset_meta = _resolve_runtime(
+        config_ref=config_ref,
+        cli_overrides=cli_overrides or None,
+    )
     run_dir = _new_run_dir(preset_meta.name, run_name)
     logging.info("Run directory: %s", run_dir)
     started_utc = datetime.now(tz=timezone.utc)
@@ -127,12 +133,19 @@ def _run_batch_targets(
     run_name: str | None = None,
     resume_from: Path | None = None,
     no_cache: bool = False,
+    parallelism: int | None = None,
 ) -> None:
     targets = _load_batch_targets(targets_file)
     if not targets:
         raise RuntimeError(f"No targets found in batch file: {targets_file}")
 
-    runtime_config, preset_meta = _resolve_runtime(config_ref=config_ref)
+    cli_overrides: dict[str, object] = {}
+    if parallelism is not None:
+        cli_overrides["batch"] = {"parallelism": int(parallelism)}
+    runtime_config, preset_meta = _resolve_runtime(
+        config_ref=config_ref,
+        cli_overrides=cli_overrides or None,
+    )
     if resume_from is not None:
         if not (resume_from / "run_state.json").exists():
             raise RuntimeError(f"Cannot resume: {resume_from}/run_state.json not found")
@@ -159,6 +172,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Preset name (quicklook/science-default/deep-search) or config TOML path.",
     )
     run_parser.add_argument("--run-name", default=None, help="Optional name appended to run id.")
+    run_parser.add_argument(
+        "--tls-threads", type=int, default=None,
+        help="Number of TLS/BLS threads per target. -1 = auto.",
+    )
 
     batch_parser = subparsers.add_parser("batch", help="Run analysis for many targets")
     batch_parser.add_argument(
@@ -183,12 +200,19 @@ def build_parser() -> argparse.ArgumentParser:
         action="store_true",
         help="Disable writing light curve cache files to save disk space.",
     )
+    batch_parser.add_argument(
+        "--parallelism", type=int, default=None,
+        help="Number of parallel workers. -1 = auto (cpu_count-1). 1 = sequential.",
+    )
 
     init_parser = subparsers.add_parser("init-config", help="Write a starter config from preset")
     init_parser.add_argument(
         "--from", dest="from_preset", choices=list_builtin_presets(), required=True
     )
     init_parser.add_argument("--out", required=True, help="Destination config path.")
+
+    cl_parser = subparsers.add_parser("collect-live", help="Generate candidates_live/novel CSVs from a run dir")
+    cl_parser.add_argument("--run", type=Path, required=True, help="Run directory.")
 
     return parser
 
@@ -380,13 +404,14 @@ def main(argv: list[str] | None = None) -> int:
     logging.basicConfig(level=logging.INFO, format="%(message)s")
     argv = list(sys.argv[1:] if argv is None else argv)
 
-    if argv and argv[0] in {"run", "batch", "init-config"}:
+    if argv and argv[0] in {"run", "batch", "init-config", "collect-live"}:
         args = build_parser().parse_args(argv)
         if args.command == "run":
             _run_single_target(
                 target=str(args.target),
                 config_ref=str(args.config),
                 run_name=args.run_name,
+                tls_threads=args.tls_threads,
             )
             return 0
         if args.command == "batch":
@@ -396,6 +421,7 @@ def main(argv: list[str] | None = None) -> int:
                 run_name=args.run_name,
                 resume_from=args.resume,
                 no_cache=bool(getattr(args, 'no_cache', False)),
+                parallelism=args.parallelism,
             )
             return 0
         if args.command == "init-config":
@@ -404,6 +430,11 @@ def main(argv: list[str] | None = None) -> int:
                 out_path=Path(str(args.out)),
             )
             logging.info("Wrote preset config: %s", out_path)
+            return 0
+        if args.command == "collect-live":
+            from exohunt.candidates_io import collect_live_from_run
+            live, novel = collect_live_from_run(Path(str(args.run)))
+            logging.info("Wrote %s and %s", live, novel)
             return 0
         raise RuntimeError(f"Unsupported command: {args.command}")
 
